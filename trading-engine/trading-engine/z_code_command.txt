@@ -1,0 +1,3 @@
+Get-ChildItem -Recurse -Filter *.java | ForEach-Object { "`n`n// FILE: $($_.FullName)`n"; Get-Content $_.FullName } | Out-File "z_all_code.txt"
+
+Get-ChildItem -Path "src/main/java/mwd" -Recurse -Filter *.java | ForEach-Object { "`n`n// FILE: $($_.FullName)`n"; Get-Content $_.FullName } | Out-File "z_all_code.txt"

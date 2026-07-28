@@ -1,0 +1,32 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Python, JSON, Config & Documentation (Force LF across Windows & Linux)
+*.py text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Force LF for Linux/Docker shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Force CRLF for Windows batch scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary Data Files (Disable text conversion)
+*.csv.gz binary
+*.parquet binary
+*.pckl binary
+*.pickle binary
+*.npy binary
+*.npz binary
+*.db binary
+*.sqlite binary

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Console plus two rolling files.
+
+    shutdownHook is disabled deliberately. Log4j's own hook races the engine's
+    shutdown hook, so the disconnect and shutdown sequence can be swallowed.
+    That sequence is the part worth reading after an unexpected stop, so Main
+    calls LogManager.shutdown() as the last statement of its own hook instead.
+
+    ENGINE_LOG_NAME must differ between engines that share a working directory,
+    for the same reason TRADING_STATE_PATH must. Two JVMs rolling one file will
+    corrupt each other's rollover.
+-->
+<Configuration status="WARN" shutdownHook="disable">
+    <Properties>
+        <Property name="logPattern">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Property>
+        <Property name="logDir">${env:ENGINE_LOG_DIR:-logs}</Property>
+        <Property name="logName">${env:ENGINE_LOG_NAME:-trading-engine}</Property>
+        <!-- ISO-8601 duration. Long enough to compare a bad session against a
+             good one several weeks later. -->
+        <Property name="retentionAge">${env:ENGINE_LOG_RETENTION:-P90D}</Property>
+        <Property name="retentionBytes">${env:ENGINE_LOG_RETENTION_BYTES:-5 GB}</Property>
+    </Properties>
+
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${logPattern}"/>
+        </Console>
+
+        <!-- Everything, one file per trading day. -->
+        <RollingFile name="EngineFile"
+                     fileName="${logDir}/${logName}.log"
+                     filePattern="${logDir}/${logName}-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${logPattern}"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="100 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="50">
+                <Delete basePath="${logDir}" maxDepth="1">
+                    <IfFileName glob="${logName}-*.log.gz">
+                        <IfAny>
+                            <IfLastModified age="${retentionAge}"/>
+                            <IfAccumulatedFileSize exceeds="${retentionBytes}"/>
+                        </IfAny>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+
+        <!-- Warnings and errors only. A full session produces a lot of INFO, so
+             this is the file to open first when something went wrong. -->
+        <RollingFile name="ProblemFile"
+                     fileName="${logDir}/${logName}-problems.log"
+                     filePattern="${logDir}/${logName}-problems-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${logPattern}"/>
+            <ThresholdFilter level="WARN" onMatch="ACCEPT" onMismatch="DENY"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="50">
+                <Delete basePath="${logDir}" maxDepth="1">
+                    <IfFileName glob="${logName}-problems-*.log.gz">
+                        <IfLastModified age="${retentionAge}"/>
+                    </IfFileName>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="EngineFile"/>
+            <AppenderRef ref="ProblemFile"/>
+        </Root>
+    </Loggers>
+</Configuration>

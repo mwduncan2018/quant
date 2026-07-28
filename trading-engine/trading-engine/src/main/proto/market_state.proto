@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package options_proxy;
+
+option java_package = "mwd.trading.optionsproxy.proto";
+option java_multiple_files = true;
+option java_outer_classname = "MarketStateProto";
+
+// Minimal UDP payload consumed by the Java trading engines.
+// Each validity flag is authoritative; an invalid numeric field is unspecified.
+message IndicatorFrame {
+  uint64 sequence                              = 1;
+  int64  emitted_at_unix_ms                   = 2;
+  string ticker                               = 3;
+  // Dollar move per share for this ticker, frozen for trading_date.
+  double static_daily_implied_move            = 4;
+  bool   static_daily_implied_move_valid      = 5;
+  reserved 6;
+  // Dollar price level per SPY share, shared by every ticker frame.
+  double spy_gamma_flip                       = 7;
+  bool   spy_gamma_flip_valid                 = 8;
+  reserved 9, 10;
+  // Intended U.S. market session in YYYY-MM-DD format.
+  string trading_date                         = 11;
+}
