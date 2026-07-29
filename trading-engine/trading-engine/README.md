@@ -182,7 +182,7 @@ The strategy code currently evaluates:
 - a close in the upper half of the minute-bar range;
 - sufficient reward from entry to daily VWAP relative to assumed risk.
 
-Position sizing targets 0.75% of net liquidation value at risk and caps size by available funds and the IBKR long-margin estimate. The bracket is divided into two equal slices:
+Position sizing targets 0.25% of net liquidation value at risk and caps size by available funds and the IBKR long-margin estimate. The bracket is divided into two equal slices:
 
 - one mathematical profit target at one implied move above entry;
 - one VWAP target;
@@ -368,7 +368,7 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 | `SHOW_UI` | `false` | Opens the Swing Blackboard monitor when true. |
 | `STRATEGY_POLL_RATE_MS` | `16` | Delay between complete strategy-universe cycles once a strategy is started. |
 | `ENTRY_ACKNOWLEDGEMENT_TIMEOUT_MS` | `10000` | Time before an unacknowledged entry is escalated. |
-| `MAX_ACTIVE_POSITIONS` | `5` | Maximum number of symbols reserved across strategies. |
+| `MAX_ACTIVE_POSITIONS` | `3` | Maximum number of symbols reserved across strategies, counting pending entries. The primary control on total leverage. |
 | `STRATEGY_TWO_SIGMA_DOWNSIDE_UNIVERSE` | 30 equities | Symbols the downside strategy may trade. |
 | `STRATEGY_TWO_SIGMA_DOWNSIDE_REFERENCE_SYMBOLS` | `SPY` | Non-traded symbols required by the strategy. |
 | `IBKR_HOST` | `127.0.0.1` | TWS or Gateway API host. |
@@ -586,7 +586,7 @@ answer that, and the pair covers both order directions.
 | Take profit | Daily VWAP, tracked while open | Daily VWAP, tracked while open |
 | Stop loss | Previous close **−** 1.25 × move | Previous close **+** 1.25 × move |
 | Veto | VWAP **below** previous close − 0.75 × move | VWAP **above** previous close + 0.75 × move |
-| Margin rate | Long | Short, checked directly rather than via the verified flag |
+| Margin rate | Long, gated on `isLongMarginRateVerified()` | Short, gated on `isShortMarginRateVerified()` |
 
 Both share the rest:
 
@@ -595,12 +595,13 @@ Both share the rest:
 | Time exit | Two hours after submission, or 15 minutes before the close, whichever is first |
 | Entry cutoff | No new position within 60 minutes of the close |
 | Re-entry | 15-minute per-ticker cooldown after an exit |
-| Sizing | 0.75% of net liquidation at risk |
+| Sizing | 0.25% of net liquidation at risk |
 
-The short checks `getShortMarginRate() > 0` directly, because
-`setMarginRateVerified(true)` is set by *either* direction's what-if order. A BUY
-what-if alone would leave the short rate at zero, which would size against a zero
-margin requirement.
+Each direction gates on its own verification flag —
+`isLongMarginRateVerified()` for the long, `isShortMarginRateVerified()` for the
+short. A single flag would have been set by *either* direction's what-if order,
+so a BUY what-if alone would have let the short size against the unpriced 1.0
+default.
 
 ### Implemented independently, on purpose
 
@@ -652,8 +653,9 @@ which is churn rather than verification.
 ### Shared limits
 
 All three strategies submit through one `BracketOrderExecutor` and share
-`MAX_ACTIVE_POSITIONS`. Because these two fire far more often, **expect them to
-occupy most of the position slots** and `TWO_SIGMA_DOWNSIDE` to rarely get one.
+`MAX_ACTIVE_POSITIONS`, which is **3**. Because these two fire far more often,
+**expect them to occupy most of the position slots** and `TWO_SIGMA_DOWNSIDE` to
+rarely get one.
 Per-ticker ownership in the `Blackboard` still prevents two strategies holding
 the same symbol, so the long and short pair cannot both take the same ticker.
 

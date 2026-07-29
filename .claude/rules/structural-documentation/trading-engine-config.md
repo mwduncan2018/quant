@@ -81,7 +81,7 @@ Instance fields initialised with defaults:
 | `showUI` | `boolean` | `true` |
 | `strategyPollRateMs` | `long` | `16` |
 | `entryAcknowledgementTimeoutMs` | `long` | `10000` |
-| `maxActivePositions` | `int` | `5` |
+| `maxActivePositions` | `int` | `3` |
 | `ibkrHost` | `String` | `"127.0.0.1"` |
 | `ibkrClientId` | `int` | `0` |
 | `expectedAccount` | `String` | `""` |

@@ -292,10 +292,14 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             return Decimal.ZERO;
         }
 
-        // The same 0.75% risk budget as the two-sigma strategy. Risk per share
-        // here is a quarter move rather than a half, so the same budget buys
-        // roughly twice the shares and twice the notional.
-        double portfolioRiskAmount = netLiquidation * 0.0075;
+        // 0.25% of net liquidation is risked per trade. Deliberately hardcoded
+        // here rather than shared or configured: each strategy owns its own risk
+        // budget so a change to one can never move another's.
+        //
+        // Risk per share here is a quarter move rather than a half, so this
+        // budget still buys roughly twice the shares the two-sigma strategy
+        // would take for the same dollar risk.
+        double portfolioRiskAmount = netLiquidation * 0.0025;
         double idealShareCount = Math.floor(portfolioRiskAmount / riskPerShare);
         if (idealShareCount <= 0) {
             return Decimal.ZERO;

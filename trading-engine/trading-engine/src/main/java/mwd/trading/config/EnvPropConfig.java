@@ -12,7 +12,7 @@ public class EnvPropConfig implements Config {
 	private boolean showUI = true;
 	private long strategyPollRateMs = 16;
 	private long entryAcknowledgementTimeoutMs = 10000;
-	private int maxActivePositions = 5;
+	private int maxActivePositions = 3;
 	private String ibkrHost = "127.0.0.1";
 	private int ibkrClientId = 0;
 	private String expectedAccount = "";
@@ -81,7 +81,7 @@ public class EnvPropConfig implements Config {
 			this.maxActivePositions = Integer.parseInt(envMaxPos);
 		} else {
 			this.maxActivePositions = Integer.parseInt(properties
-					.getProperty("MAX_ACTIVE_POSITIONS", "5"));
+					.getProperty("MAX_ACTIVE_POSITIONS", "3"));
 		}
 
 		this.ibkrHost = value("IBKR_HOST", properties, "127.0.0.1");

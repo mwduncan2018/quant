@@ -344,7 +344,10 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             return Decimal.ZERO;
         }
 
-        double portfolioRiskAmount = netLiquidation * 0.0075;
+        // 0.25% of net liquidation is risked per trade. Deliberately hardcoded
+        // here rather than shared or configured: each strategy owns its own risk
+        // budget so a change to one can never move another's.
+        double portfolioRiskAmount = netLiquidation * 0.0025;
         double idealShareCount = Math.floor(portfolioRiskAmount / riskPerShare);
         Decimal idealQuantity = Decimal.get(idealShareCount);
         

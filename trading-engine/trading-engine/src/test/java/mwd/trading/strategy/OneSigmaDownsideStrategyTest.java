@@ -246,8 +246,8 @@ class OneSigmaDownsideStrategyTest {
         assertEquals(1, intents.size());
         assertEquals(99.0, intents.get(0).takeProfitPrice, 1.0e-9);
         assertEquals(STOP_LEVEL, intents.get(0).stopLossPrice, 1.0e-9);
-        // 0.75% of 100,000 is 750, risk per share is 1.00, so 750 shares.
-        assertEquals(750.0, intents.get(0).quantity.value().doubleValue(), 1.0e-9);
+        // 0.25% of 100,000 is 250, risk per share is 1.00, so 250 shares.
+        assertEquals(250.0, intents.get(0).quantity.value().doubleValue(), 1.0e-9);
     }
 
     @Test
@@ -373,15 +373,15 @@ class OneSigmaDownsideStrategyTest {
         Stock stock = stock();
         BracketOrder bracketOrder = new BracketOrder(
                 "trade-1", OneSigmaDownsideMeanReversionStrategy.STRATEGY_ID,
-                "DU123456", 1, "BUY", TICKER, 1, Decimal.get(750));
+                "DU123456", 1, "BUY", TICKER, 1, Decimal.get(250));
         bracketOrder.setEntryPrice(ENTRY_LEVEL);
         BracketOrder.ExitSlice slice =
-                new BracketOrder.ExitSlice(11, 12, 13, Decimal.get(750), "oca-1");
+                new BracketOrder.ExitSlice(11, 12, 13, Decimal.get(250), "oca-1");
         slice.setTakeProfitPrice(99.0);
         slice.setStopLossPrice(STOP_LEVEL);
         bracketOrder.addSlice(slice);
         stock.setActiveBracket(bracketOrder);
-        stock.setPositionSize(Decimal.get(750));
+        stock.setPositionSize(Decimal.get(250));
         stock.getState().set(Stock.PositionState.OPEN);
         blackboard.tryReservePosition(
                 TICKER, OneSigmaDownsideMeanReversionStrategy.STRATEGY_ID);
