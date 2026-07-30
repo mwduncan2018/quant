@@ -3,7 +3,19 @@ package mwd.trading.config;
 import java.util.Set;
 
 public interface Config {
+	/**
+	 * Whether market data is real-time. Governs the IBKR market-data type and the
+	 * tick field numbering only; it does not decide which account is traded.
+	 */
 	boolean isLiveIBKRData();
+
+	/**
+	 * Whether orders go to the LIVE account. Governs the TWS port and the default
+	 * trading-state path. Deliberately separate from {@link #isLiveIBKRData()} so
+	 * that enabling a real-time subscription on the PAPER engine cannot also
+	 * redirect its order flow.
+	 */
+	boolean isLiveTrading();
 	boolean showUI();
 	String getIBKRHost();
 	int getIBKRPort();

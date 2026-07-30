@@ -9,6 +9,7 @@ import java.util.TreeSet;
 
 public class EnvPropConfig implements Config {
 	private boolean isLive = false;
+	private boolean isLiveTrading = false;
 	private boolean showUI = true;
 	private long strategyPollRateMs = 16;
 	private long entryAcknowledgementTimeoutMs = 10000;
@@ -55,6 +56,22 @@ public class EnvPropConfig implements Config {
 					.getProperty("LIVE_IBKR_DATA", "false"));
 		}
 
+		// 2b. Initialize 'isLiveTrading'
+		//
+		// Split from LIVE_IBKR_DATA on purpose. One flag used to select the TWS
+		// port, the journal path, the market-data type, and the tick field
+		// numbering at once, so turning on a real-time subscription for the PAPER
+		// engine would also have pointed it at the LIVE port and the LIVE journal.
+		String envLiveTrading = System.getenv("LIVE_IBKR_TRADING");
+		if (envLiveTrading != null && !envLiveTrading.isEmpty()) {
+			this.isLiveTrading = Boolean.parseBoolean(envLiveTrading);
+		} else {
+			this.isLiveTrading = Boolean.parseBoolean(properties
+					.getProperty("LIVE_IBKR_TRADING", "false"));
+		}
+
+		requireCoherentDataAndTradingPair(this.isLive, this.isLiveTrading);
+
 		// 3. Initialize 'showUI'
 		String envUI = System.getenv("SHOW_UI");
 		if (envUI != null && !envUI.isEmpty()) {
@@ -88,7 +105,7 @@ public class EnvPropConfig implements Config {
 		this.ibkrClientId = Integer.parseInt(value("IBKR_CLIENT_ID", properties, "0"));
 		this.expectedAccount = value("IBKR_EXPECTED_ACCOUNT", properties, "").trim();
 		this.reconnectDelayMs = Long.parseLong(value("IBKR_RECONNECT_DELAY_MS", properties, "5000"));
-		String defaultStatePath = this.isLive
+		String defaultStatePath = this.isLiveTrading
 				? "data/trading-state-live.json"
 				: "data/trading-state-paper.json";
 		this.tradingStatePath = value("TRADING_STATE_PATH", properties, defaultStatePath);
@@ -120,6 +137,22 @@ public class EnvPropConfig implements Config {
 		// earnings timeouts and retry delay; both are the same local service.
 		this.marketCalendarEndpointUrl = value(
 				"MARKET_CALENDAR_ENDPOINT_URL", properties, "http://127.0.0.1:8000/calendar").trim();
+	}
+
+	/**
+	 * Rejects the one pairing the split makes expressible: trading the LIVE
+	 * account against delayed market data. Every other combination is legitimate —
+	 * PAPER on delayed, PAPER on real-time, LIVE on real-time — but pricing real
+	 * orders off a quote that is fifteen minutes old is not a configuration
+	 * anyone means to write, and it is far better caught at startup than
+	 * discovered by a fill.
+	 */
+	static void requireCoherentDataAndTradingPair(boolean liveData, boolean liveTrading) {
+		if (liveTrading && !liveData) {
+			throw new IllegalStateException(
+					"LIVE_IBKR_TRADING is true while LIVE_IBKR_DATA is false: "
+					+ "the engine will not trade the live account on delayed market data");
+		}
 	}
 
 	private static String value(String key, Properties properties, String defaultValue) {
@@ -158,7 +191,7 @@ public class EnvPropConfig implements Config {
 	public int getIBKRPort() {
 		// 7496 = Live
 		// 7497 = Paper
-		return this.isLive ? 7496 : 7497;
+		return this.isLiveTrading ? 7496 : 7497;
 	}
 
 	@Override
@@ -181,6 +214,11 @@ public class EnvPropConfig implements Config {
 	@Override
 	public boolean isLiveIBKRData() {
 		return this.isLive;
+	}
+
+	@Override
+	public boolean isLiveTrading() {
+		return this.isLiveTrading;
 	}
 	
 	@Override

@@ -74,10 +74,13 @@ public class BracketOrder {
         private final Decimal quantity;
         private final String oneCancelsAllGroup;
         
-        private double takeProfitPrice;
-        private double stopLossPrice;
-        private long timeExit;
-        private boolean isFilled = false;
+        // Written by the strategy thread through BracketOrderExecutor and by the
+        // IBKR reader thread through OrderLifecycleHandler, and read by both plus
+        // the Swing EDT. Every one of them needs a visibility guarantee.
+        private volatile double takeProfitPrice;
+        private volatile double stopLossPrice;
+        private volatile long timeExit;
+        private volatile boolean isFilled = false;
 
         public ExitSlice(int takeProfitOrderId, int stopLossOrderId, int timeExitOrderId, 
                          Decimal quantity, String oneCancelsAllGroup) {
@@ -124,12 +127,20 @@ public class BracketOrder {
     // Modification tracking for the IBKR 20:1 Order-to-Fill Ratio
     private final AtomicInteger updateRequestCount = new AtomicInteger(0);
 
-    // Consolidated Entry State
-    private double entryPrice;
-    private Decimal totalQuantity;
-    private Status status;
-    private Decimal filledQuantity = Decimal.get(0);
-    private Decimal remainingQuantity;
+    // Consolidated Entry State.
+    //
+    // These are written on the IBKR reader thread and read by three strategy
+    // threads polling every 16 ms. Without volatile there is no happens-before
+    // edge between the write and the read, so a strategy may never observe the
+    // new value: the JIT is free to hoist a non-volatile field read out of a
+    // poll loop. status is the field that matters most, because it drives the
+    // pending-entry state machine including the WORKING_PARENT release of the
+    // engine-wide entry lock.
+    private volatile double entryPrice;
+    private final Decimal totalQuantity;
+    private volatile Status status;
+    private volatile Decimal filledQuantity = Decimal.get(0);
+    private volatile Decimal remainingQuantity;
 
     public BracketOrder(String ticker, int parentOrderId, Decimal totalQuantity) {
         this("LEGACY-" + ticker + '-' + parentOrderId, "UNKNOWN", "", 0, "",

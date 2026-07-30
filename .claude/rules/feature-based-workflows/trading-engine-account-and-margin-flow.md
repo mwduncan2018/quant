@@ -107,7 +107,7 @@ per-symbol margin rates.
     **Receiving Component:** `OrderLifecycleHandler`
 
 18. **Initiating Component:** `OrderLifecycleHandler.processWhatIf(Contract, Order, OrderState)`
-    **Method Invocation:** `blackboard.getStock(contract.symbol())`, `Double.parseDouble(orderState.initMarginChange())`, `100 * stock.getLastPrice()` as the notional; a non-positive notional returns without writing
+    **Method Invocation:** `blackboard.getStock(contract.symbol())`, `parseMarginChange(orderState.initMarginChange())`, `100 * stock.getLastPrice()` as the notional; a null, blank, unparseable, non-positive, or `Double.MAX_VALUE` margin figure returns without writing, as does a non-positive notional
     **Receiving Component:** `Blackboard`, `Stock`, `OrderState`
 
 19. **Initiating Component:** `OrderLifecycleHandler.processWhatIf(Contract, Order, OrderState)`

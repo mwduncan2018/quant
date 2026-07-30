@@ -33,8 +33,13 @@ public class TickMap {
 		return liveIBKRData() ? (field == 4) : (field == 68);
 	}
 
+	/**
+	 * IBKR publishes no delayed mark price. 78 is {@code CREDITMAN_MARK_PRICE},
+	 * an unrelated field this used to claim, so the delayed branch matches
+	 * nothing rather than mislabelling another value as the mark.
+	 */
 	public boolean isMarkPrice(int field) {
-		return liveIBKRData() ? (field == 37) : (field == 78);
+		return liveIBKRData() && field == 37;
 	}
 
 	public boolean isOpen(int field) {
@@ -78,8 +83,12 @@ public class TickMap {
 		return liveIBKRData() ? (field == 8) : (field == 74);
 	}
 
+	/**
+	 * IBKR publishes no delayed average volume. 77 is {@code RT_TRD_VOLUME}, a
+	 * real-time figure this used to claim, so the delayed branch matches nothing.
+	 */
 	public boolean isAverageVolume(int field) {
-		return liveIBKRData() ? (field == 21) : (field == 77);
+		return liveIBKRData() && field == 21;
 	}
 
 }

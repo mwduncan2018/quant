@@ -302,7 +302,7 @@ No `Blackboard` reference.
 
 ### 1. Class/Interface Responsibilities
 
-Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`. It declares no VWAP predicate: IBKR defines no VWAP price tick in either set, and the figure arrives on `tickString` as `RT_VOLUME`.
+Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`. `isMarkPrice` and `isAverageVolume` match nothing under delayed data, because IBKR publishes no delayed equivalent of either. It declares no VWAP predicate: IBKR defines no VWAP price tick in either set, and the figure arrives on `tickString` as `RT_VOLUME`.
 
 ### 2. Injected Dependencies
 

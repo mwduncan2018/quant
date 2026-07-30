@@ -391,7 +391,8 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 
 | Key | Repository default | Purpose |
 | --- | --- | --- |
-| `LIVE_IBKR_DATA` | `false` | Selects PAPER/delayed mode when false and LIVE mode when true. Also determines TWS port, IBKR market-data type, tick-field mapping, and default state path. |
+| `LIVE_IBKR_DATA` | `false` | Market-data quality only. Selects the IBKR market-data type and the tick-field mapping. |
+| `LIVE_IBKR_TRADING` | `false` | Which account receives orders. Selects the TWS port and the default state path. |
 | `SHOW_UI` | `false` | Opens the Swing Blackboard monitor when true. |
 | `STRATEGY_POLL_RATE_MS` | `16` | Delay between complete strategy-universe cycles once a strategy is started. |
 | `ENTRY_ACKNOWLEDGEMENT_TIMEOUT_MS` | `10000` | Time before an unacknowledged entry is escalated. |
@@ -424,10 +425,32 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 
 ### Mode-derived settings
 
-| `LIVE_IBKR_DATA` | TWS port | IBKR market-data type | Default journal |
-| --- | ---: | ---: | --- |
-| `false` | 7497 | 3 — delayed | `data/trading-state-paper.json` |
-| `true` | 7496 | 1 — live | `data/trading-state-live.json` |
+Two independent flags. `LIVE_IBKR_DATA` decides what the engine *sees*;
+`LIVE_IBKR_TRADING` decides where its orders *go*.
+
+| `LIVE_IBKR_DATA` | IBKR market-data type | Tick fields | VWAP available |
+| --- | ---: | --- | --- |
+| `false` | 3 — delayed | delayed ids (66–76) | **no** |
+| `true` | 1 — real-time | live ids | yes |
+
+| `LIVE_IBKR_TRADING` | TWS port | Default journal |
+| --- | ---: | --- |
+| `false` | 7497 | `data/trading-state-paper.json` |
+| `true` | 7496 | `data/trading-state-live.json` |
+
+They were one flag until it became clear what that costs: buying a real-time
+subscription for the PAPER engine and setting the single flag to `true` would
+also have pointed it at the LIVE port and the LIVE journal. A change made for
+data quality would have redirected order flow.
+
+Three of the four pairings are legitimate — PAPER on delayed, PAPER on
+real-time, LIVE on real-time. The fourth, **LIVE trading on delayed data**,
+throws at startup rather than pricing real orders off a quote that is fifteen
+minutes old.
+
+Because VWAP arrives only on a real-time subscription and gates every strategy,
+`LIVE_IBKR_DATA=false` means **no orders will be placed at all**. That is the
+correct conservative outcome, not a fault to debug.
 
 The port is currently derived and cannot be overridden with an `IBKR_PORT` setting. Configure TWS/Gateway to match, or update `Config` and `EnvPropConfig` before using a nonstandard port.
 
@@ -436,7 +459,8 @@ The port is currently derived and cannot be overridden with an `IBKR_PORT` setti
 Set these values in the Eclipse launch configuration or the PowerShell process that starts the engine:
 
 ```powershell
-$env:LIVE_IBKR_DATA = 'false'
+$env:LIVE_IBKR_DATA = 'false'      # 'true' once a real-time subscription is shared to PAPER
+$env:LIVE_IBKR_TRADING = 'false'   # keep false: orders stay on the paper account
 $env:IBKR_HOST = '127.0.0.1'
 $env:IBKR_CLIENT_ID = '20'
 $env:IBKR_EXPECTED_ACCOUNT = 'DU1234567'
@@ -456,6 +480,7 @@ Do not use this profile until the strategy, proxy inputs, and PAPER checklist ar
 
 ```bash
 export LIVE_IBKR_DATA=true
+export LIVE_IBKR_TRADING=true
 export IBKR_HOST=127.0.0.1
 export IBKR_CLIENT_ID=10
 export IBKR_EXPECTED_ACCOUNT=U1234567

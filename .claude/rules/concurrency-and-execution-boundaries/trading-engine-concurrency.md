@@ -374,7 +374,7 @@ Compare-and-set / read-modify-write call sites:
 
 | Field | Declaration | Mutating methods |
 |---|---|---|
-| `offsetMillis` | `long` (non-volatile, no lock) | `setOffset` (called from `BrokerTimeHandler.onCurrentTime` on the reader thread); read by `getMarketTime` from strategy threads and the Swing EDT |
+| `offsetMillis` | `volatile long` | `setOffset` (called from `BrokerTimeHandler.onCurrentTime` on the reader thread); read by `getMarketTime` from strategy threads and the Swing EDT |
 
 `TickMap` holds only `private final boolean liveIBKRData`, set in the constructor.
 
@@ -421,11 +421,11 @@ Compare-and-set / read-modify-write call sites:
 | `legStates` | `final Map<Integer,OrderLegState>` (`LinkedHashMap`), all access `synchronized` | `registerOrderLeg`, `applyBrokerUpdate` |
 | `updateRequestCount` | `final AtomicInteger` | `incrementUpdateCount` |
 | `slices` | `final List<ExitSlice>` (`ArrayList`, unsynchronized) | `addSlice`; returned unwrapped by `getSlices` |
-| `entryPrice` | `double` (non-volatile) | `setEntryPrice` |
-| `totalQuantity` | `Decimal` (non-volatile) | constructor |
-| `status` | `Status` (non-volatile) | `setStatus` |
-| `filledQuantity` | `Decimal` (non-volatile) | `setFilledQuantity` |
-| `remainingQuantity` | `Decimal` (non-volatile) | `setRemainingQuantity` |
+| `entryPrice` | `volatile double` | `setEntryPrice` |
+| `totalQuantity` | `final Decimal` | constructor |
+| `status` | `volatile Status` | `setStatus` |
+| `filledQuantity` | `volatile Decimal` | `setFilledQuantity` |
+| `remainingQuantity` | `volatile Decimal` | `setRemainingQuantity` |
 
 `BracketOrder.OrderLegState`
 
@@ -441,10 +441,10 @@ Compare-and-set / read-modify-write call sites:
 
 | Field | Declaration | Mutating methods |
 |---|---|---|
-| `takeProfitPrice` | `double` (non-volatile) | `setTakeProfitPrice` — called from `BracketOrderExecutor.placeTripleThreat` and `updateTripleThreatExits` |
-| `stopLossPrice` | `double` (non-volatile) | `setStopLossPrice` — same call sites |
-| `timeExit` | `long` (non-volatile) | `setTimeExit` — same call sites |
-| `isFilled` | `boolean` (non-volatile) | `setFilled` — called from `OrderLifecycleHandler.onOrderStatus` and `onCompletedOrder` on the reader thread; read by `BlackboardMonitor` on the EDT |
+| `takeProfitPrice` | `volatile double` | `setTakeProfitPrice` — called from `BracketOrderExecutor.placeTripleThreat` and `updateTripleThreatExits` |
+| `stopLossPrice` | `volatile double` | `setStopLossPrice` — same call sites |
+| `timeExit` | `volatile long` | `setTimeExit` — same call sites |
+| `isFilled` | `volatile boolean` | `setFilled` — called from `OrderLifecycleHandler.onOrderStatus` and `onCompletedOrder` on the reader thread; read by `BlackboardMonitor` on the EDT |
 | `lastModificationTime` | `long` (non-volatile) | `setLastModificationTime` |
 
 ### 3.14 `mwd.trading.reconciliation.BrokerState`

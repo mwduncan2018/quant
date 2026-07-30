@@ -147,7 +147,7 @@ public void setFilled(boolean isFilled)
 | `getSlices()` | Returns the mutable `slices` list itself |
 | `isExitOrderId(int)`, `getSliceByOrderId(int)` | Read `slices` |
 
-`OrderLegState` fields `permanentId`, `status`, `filledQuantity`, `remainingQuantity`, `acknowledged` are `volatile`. `BracketOrder`'s own `entryPrice`, `totalQuantity`, `status`, `filledQuantity`, `remainingQuantity` are not.
+`OrderLegState` fields `permanentId`, `status`, `filledQuantity`, `remainingQuantity`, `acknowledged` are `volatile`. So are `BracketOrder`'s own `entryPrice`, `status`, `filledQuantity`, and `remainingQuantity`, and every mutable `ExitSlice` field; `totalQuantity` is `final`. All of them are written on the IBKR reader thread and read by the strategy poll threads.
 
 **Centralized state objects**
 
@@ -294,6 +294,7 @@ public void onCompletedOrdersEnd()
 public void onOrderBound(long permanentIdentifier, int apiClientIdentifier, int apiOrderIdentifier)
 
 private void processWhatIf(Contract contract, Order order, OrderState orderState)
+static double parseMarginChange(String reported)
 private void validateExitSlice(int orderIdentifier, Order order, BracketOrder bracketOrder)
 private BracketOrder resolveBracket(int apiOrderId, long permanentId, String orderReference)
 private void markPositionOpen(BracketOrder bracketOrder, Stock stock)
@@ -324,7 +325,7 @@ Holds none. Every lookup and identity write goes through the `ConcurrentHashMap`
 | `onCompletedOrdersEnd()` | Calls `reconciliationManager.onCompletedOrdersEnd()` |
 | `onOrderBound(...)` | Mutates `blackboard.getOrderRegistry().recordBrokerIdentity(...)` |
 | `onCommissionAndFeesReport(CommissionAndFeesReport)` | No state interaction; empty body with a comment |
-| `processWhatIf(...)` | Reads `blackboard.getStock(symbol)`; mutates `stock.setLongMarginRate`/`setLongMarginRateVerified` or `setShortMarginRate`/`setShortMarginRateVerified` |
+| `processWhatIf(...)` | Reads `blackboard.getStock(symbol)`; mutates `stock.setLongMarginRate`/`setLongMarginRateVerified` or `setShortMarginRate`/`setShortMarginRateVerified`. Returns without writing when `parseMarginChange` yields `NaN`, leaving the rate at its 1.0 default and the direction unverified |
 | `markPositionOpen(BracketOrder, Stock)` | Mutates `stock.getState().set(PositionState.OPEN)` (the `AtomicReference` in `Stock`) and `blackboard.releaseGlobalPending(String, String)` |
 | `completeConfirmedFlat(BracketOrder)` | Reads `blackboard.getStock(String)`; mutates `stock.getState().set(PositionState.FLAT)`, `stock.setActiveBracket(null)`, `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)` |
 | `persist(BracketOrder)` | Calls `stateStore.recordBrokerUpdate(BracketOrder, String)` |

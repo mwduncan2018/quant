@@ -16,6 +16,7 @@ public final class TestConfig implements Config {
     }
 
     @Override public boolean isLiveIBKRData() { return false; }
+    @Override public boolean isLiveTrading() { return false; }
     @Override public boolean showUI() { return false; }
     @Override public String getIBKRHost() { return "127.0.0.1"; }
     @Override public int getIBKRPort() { return 7497; }
