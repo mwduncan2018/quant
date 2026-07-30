@@ -8,7 +8,7 @@ public class Account {
     private volatile double settledCash;
     private volatile double buyingPower;
     private volatile double availableFunds;
-    private volatile double excessMargin;
+    private volatile double excessLiquidity;
     private volatile double realizedPnL;
     private volatile double unrealizedPnL;
     private volatile double cushion;
@@ -47,8 +47,8 @@ public class Account {
     public double getAvailableFunds() { return availableFunds; }
     public void setAvailableFunds(double val) { this.availableFunds = val; }
 
-    public double getExcessMargin() { return excessMargin; }
-    public void setExcessMargin(double val) { this.excessMargin = val; }
+    public double getExcessLiquidity() { return excessLiquidity; }
+    public void setExcessLiquidity(double val) { this.excessLiquidity = val; }
 
     public double getRealizedPnL() { return realizedPnL; }
     public void setRealizedPnL(double val) { this.realizedPnL = val; }

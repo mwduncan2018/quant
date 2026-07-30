@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import mwd.trading.risk.MarginMethodology;
+
 import mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy;
 
 class EnvPropConfigTest {
@@ -41,6 +43,36 @@ class EnvPropConfigTest {
         assertDoesNotThrow(() -> EnvPropConfig.requireCoherentDataAndTradingPair(false, false));
         assertDoesNotThrow(() -> EnvPropConfig.requireCoherentDataAndTradingPair(true, false));
         assertDoesNotThrow(() -> EnvPropConfig.requireCoherentDataAndTradingPair(true, true));
+    }
+
+    @Test
+    void aDeclaredMarginRegimeIsAccepted() {
+        assertEquals(MarginMethodology.REG_T, EnvPropConfig.requireMarginMethodology("REG_T"));
+        assertEquals(MarginMethodology.PORTFOLIO,
+                EnvPropConfig.requireMarginMethodology("  PORTFOLIO  "));
+    }
+
+    @Test
+    void aRegimeThatIsNeitherRefusesToStart() {
+        // Presence is not enough. "REGT" is a declaration of nothing, and
+        // guessing which of the two was meant is the guess this refuses to make.
+        for (String wrong : new String[] {"REGT", "PM", "portfolio margin", "true"}) {
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> EnvPropConfig.requireMarginMethodology(wrong));
+            assertTrue(thrown.getMessage().contains("REG_T or PORTFOLIO"));
+        }
+    }
+
+    @Test
+    void anUndeclaredMarginRegimeRefusesToStart() {
+        // There is no safe default. Assuming portfolio margin while IBKR charges
+        // Reg-T sizes every position larger than the account can carry, and
+        // nothing says so until the liquidation.
+        for (String absent : new String[] {null, "", "   "}) {
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> EnvPropConfig.requireMarginMethodology(absent));
+            assertTrue(thrown.getMessage().contains("MARGIN_METHODOLOGY"));
+        }
     }
 
     @Test

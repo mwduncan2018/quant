@@ -35,7 +35,9 @@ public final class TestConfig implements Config {
     @Override public int getOptionsProxyUdpPort() { return 0; }
     @Override public long getOptionsProxyFrameMaxAgeMs() { return 5000; }
     @Override public long getMarketDataMaxAgeMs() { return 30_000; }
-    @Override public String getMarginMethodology() { return "REG_T"; }
+    @Override public mwd.trading.risk.MarginMethodology getMarginMethodology() {
+        return mwd.trading.risk.MarginMethodology.REG_T;
+    }
     @Override public String getUniverseReferencePath() { return "data/universe-reference.csv"; }
     @Override public double getDefaultLongMarginRate() { return 0.50; }
     @Override public double getDefaultShortMarginRate() { return 0.50; }

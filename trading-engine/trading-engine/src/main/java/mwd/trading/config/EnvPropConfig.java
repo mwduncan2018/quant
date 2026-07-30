@@ -7,6 +7,8 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
 
+import mwd.trading.risk.MarginMethodology;
+
 public class EnvPropConfig implements Config {
 	private boolean isLive = false;
 	private boolean isLiveTrading = false;
@@ -24,7 +26,7 @@ public class EnvPropConfig implements Config {
 	private int optionsProxyUdpPort = 5005;
 	private long optionsProxyFrameMaxAgeMs = 5000;
 	private long marketDataMaxAgeMs = 30000;
-	private String marginMethodology = "REG_T";
+	private MarginMethodology marginMethodology;
 	private String universeReferencePath = "data/universe-reference.csv";
 	private double defaultLongMarginRate = 0.50;
 	private double defaultShortMarginRate = 0.50;
@@ -129,7 +131,8 @@ public class EnvPropConfig implements Config {
 		this.marketDataMaxAgeMs = Long.parseLong(
 				value("MARKET_DATA_MAX_AGE_MS", properties, "30000"));
 
-		this.marginMethodology = value("MARGIN_METHODOLOGY", properties, "REG_T");
+		this.marginMethodology = requireMarginMethodology(
+				value("MARGIN_METHODOLOGY", properties, ""));
 		this.universeReferencePath = value(
 				"UNIVERSE_REFERENCE_PATH", properties, "data/universe-reference.csv");
 		this.defaultLongMarginRate = Double.parseDouble(
@@ -172,6 +175,40 @@ public class EnvPropConfig implements Config {
 	 * anyone means to write, and it is far better caught at startup than
 	 * discovered by a fill.
 	 */
+	/**
+	 * The margin regime has to be stated, never inferred and never defaulted.
+	 *
+	 * <p>
+	 * It decides how the engine judges its distance from IBKR liquidating the
+	 * account, and the two regimes do not agree. Under Reg-T the requirement is a
+	 * fixed fraction of position value, so the distance is something the engine can
+	 * compute. Under Portfolio Margin it is a TIMS figure IBKR recomputes, and can
+	 * raise while prices sit still, so the engine can only read what IBKR reports.
+	 *
+	 * <p>
+	 * A default would make a missing key indistinguishable from a deliberate
+	 * choice. Defaulting to the wrong one is silent over-leverage: sizing against a
+	 * portfolio-margin rate while IBKR charges Reg-T means every position is larger
+	 * than the account can carry, and nothing says so until the liquidation.
+	 */
+	static MarginMethodology requireMarginMethodology(String configured) {
+		if (configured == null || configured.isBlank()) {
+			throw new IllegalStateException(
+				"MARGIN_METHODOLOGY must be set to REG_T or PORTFOLIO. It decides how the "
+					+ "engine measures its distance from IBKR liquidating the account, so there "
+					+ "is no safe default to fall back on.");
+		}
+		try {
+			return MarginMethodology.parse(configured);
+		} catch (IllegalArgumentException exception) {
+			throw new IllegalStateException(
+				"MARGIN_METHODOLOGY must be REG_T or PORTFOLIO, was '" + configured.trim()
+					+ "'. The engine measures its distance from IBKR liquidating the account "
+					+ "differently under each, so it will not guess which one you meant.",
+				exception);
+		}
+	}
+
 	static void requireCoherentDataAndTradingPair(boolean liveData, boolean liveTrading) {
 		if (liveTrading && !liveData) {
 			throw new IllegalStateException(
@@ -302,7 +339,7 @@ public class EnvPropConfig implements Config {
 	}
 
 	@Override
-	public String getMarginMethodology() {
+	public MarginMethodology getMarginMethodology() {
 		return this.marginMethodology;
 	}
 
