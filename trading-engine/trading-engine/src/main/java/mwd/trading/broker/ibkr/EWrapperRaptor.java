@@ -152,6 +152,11 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 			this.sizeTickHandler.onTickSize(reqId, field, size);
 	}
 
+	@Override public void tickString(int reqId, int tickType, String value) {
+		var consumers = registry.getConsumersFor(reqId);
+		if (consumers.contains(RequestRegistry.DataConsumer.TICK_PRICE))
+			this.priceTickHandler.onTickString(reqId, tickType, value);
+	}
 	@Override public void tickByTickBidAsk(int reqId, long time, double bidPrice,
 	                             double askPrice, Decimal bidSize, Decimal askSize,
 	                             TickAttribBidAsk tickAttribBidAsk) {

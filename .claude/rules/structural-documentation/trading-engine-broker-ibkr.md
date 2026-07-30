@@ -79,6 +79,7 @@ public void attachLifecycle(IbkrSessionManager sessionManager, MarketDataSubscri
 
 @Override public void tickPrice(int reqId, int field, double price, TickAttrib attribs)
 @Override public void tickSize(int reqId, int field, Decimal size)
+@Override public void tickString(int reqId, int tickType, String value)
 @Override public void tickByTickBidAsk(int reqId, long time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, TickAttribBidAsk tickAttribBidAsk)
 @Override public void tickByTickAllLast(int reqId, int tickType, long time, double price, Decimal size, TickAttribLast tickAttribLast, String exchange, String specialConditions)
 
@@ -112,7 +113,7 @@ public void attachLifecycle(IbkrSessionManager sessionManager, MarketDataSubscri
 
 **Concurrent collections**
 
-Holds no collection of its own. Reads the `ConcurrentHashMap` inside `RequestRegistry` through `registry.getConsumersFor(int)` in: `tickPrice`, `tickSize`, `tickByTickBidAsk`, `tickByTickAllLast`, `historicalData`, `historicalDataEnd`, `historicalDataUpdate`.
+Holds no collection of its own. Reads the `ConcurrentHashMap` inside `RequestRegistry` through `registry.getConsumersFor(int)` in: `tickPrice`, `tickSize`, `tickString`, `tickByTickBidAsk`, `tickByTickAllLast`, `historicalData`, `historicalDataEnd`, `historicalDataUpdate`.
 
 **Centralized state objects**
 
@@ -301,7 +302,7 @@ No `Blackboard` reference.
 
 ### 1. Class/Interface Responsibilities
 
-Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`.
+Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`. It declares no VWAP predicate: IBKR defines no VWAP price tick in either set, and the figure arrives on `tickString` as `RT_VOLUME`.
 
 ### 2. Injected Dependencies
 
@@ -325,7 +326,6 @@ public boolean isOpen(int field)
 public boolean isClose(int field)
 public boolean isHigh(int field)
 public boolean isLow(int field)
-public boolean isVwap(int field)
 
 public boolean isBidSize(int field)
 public boolean isAskSize(int field)

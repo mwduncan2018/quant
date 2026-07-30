@@ -19,8 +19,8 @@ recording, and strategy consumption.
 | `mwd.trading.broker.ibkr.RequestRegistry` | Stores `reqId -> (ticker, EnumSet<DataConsumer>)` and answers `getTickerFor(int)` / `getConsumersFor(int)`. |
 | `mwd.trading.broker.ibkr.RequestRegistry.DataConsumer` | Enum whose members select which handler receives a callback. |
 | `mwd.trading.broker.ibkr.EWrapperRaptor` | `EWrapper` implementation that resolves consumers per `reqId` and dispatches each callback to the matching handlers. |
-| `mwd.trading.broker.ibkr.TickMap` | Classifies an IBKR tick field number into bid/ask/last/mark/open/close/high/low/VWAP and the size variants. |
-| `mwd.trading.marketdata.PriceTickHandler` | Validates prices, writes them to `Stock`, and records `LAST_PRICE`, `PREVIOUS_CLOSE`, `DAILY_VWAP`. |
+| `mwd.trading.broker.ibkr.TickMap` | Classifies an IBKR tick field number into bid/ask/last/mark/open/close/high/low and the size variants. |
+| `mwd.trading.marketdata.PriceTickHandler` | Validates prices, writes them to `Stock`, and records `LAST_PRICE`, `PREVIOUS_CLOSE`, and — from the `RT_VOLUME` string tick — `DAILY_VWAP`. |
 | `mwd.trading.marketdata.SizeTickHandler` | Validates sizes and writes bid/ask/last size, intraday volume, and average daily volume to `Stock`. |
 | `mwd.trading.marketdata.MinuteBarHandler` | Validates a `Bar`, stores it as the last minute bar, and records `MINUTE_BAR`. |
 | `mwd.trading.indicator.MinuteVolumeTracker` | Maintains the per-session completed-bar window, writes both minute-volume figures, and records `MINUTE_VOLUME_BASELINE` once the window is full. |
@@ -84,11 +84,11 @@ recording, and strategy consumption.
     **Receiving Component:** `PriceTickHandler`, `SimpleMovingAverageTracker`
 
 11. **Initiating Component:** `PriceTickHandler.onTickPrice(...)`
-    **Method Invocation:** `registry.getTickerFor(reqId)`, `blackboard.getStock(ticker)`, `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow/isVwap(field)`
+    **Method Invocation:** `registry.getTickerFor(reqId)`, `blackboard.getStock(ticker)`, `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow(field)`
     **Receiving Component:** `RequestRegistry`, `Blackboard`, `TickMap`
 
 12. **Initiating Component:** `PriceTickHandler.onTickPrice(...)`
-    **Method Invocation:** `stock.setLastPrice(double)` + `inputStore.record(ticker, MarketDataInput.LAST_PRICE)`; `stock.setPreviousClose(double)` + `inputStore.record(ticker, MarketDataInput.PREVIOUS_CLOSE)`; `stock.setDailyVWAP(double)` + `inputStore.record(ticker, MarketDataInput.DAILY_VWAP)`; other fields are written without a readiness record
+    **Method Invocation:** `stock.setLastPrice(double)` + `inputStore.record(ticker, MarketDataInput.LAST_PRICE)`; `stock.setPreviousClose(double)` + `inputStore.record(ticker, MarketDataInput.PREVIOUS_CLOSE)`; other fields are written without a readiness record. VWAP is absent from this callback: IBKR publishes no VWAP price tick, and it arrives on `tickString` instead
     **Receiving Component:** `Stock`, `MarketDataInputStore`
 
 13. **Initiating Component:** `EWrapperRaptor.tickSize(int reqId, int field, Decimal size)`

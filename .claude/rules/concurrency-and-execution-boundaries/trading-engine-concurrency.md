@@ -71,6 +71,7 @@ Every `EWrapperRaptor` override runs on the reader thread. `EWrapperRaptor` perf
 | `connectAck` | `IbkrSessionManager.onConnectAck` |
 | `tickPrice` | `PriceTickHandler.onTickPrice`; `SimpleMovingAverageTracker.onTickPrice` |
 | `tickSize` | `SizeTickHandler.onTickSize` |
+| `tickString` | `PriceTickHandler.onTickString` |
 | `tickByTickBidAsk` | `PriceTickHandler.onTickByTickBidAsk`; `SizeTickHandler.onTickByTickBidAsk` |
 | `tickByTickAllLast` | `PriceTickHandler.onTickByTickAllLast`; `SizeTickHandler.onTickByTickAllLast` |
 | `historicalData` | `IntradayWilderAtrTracker.onHistoricalData`; `DailyWilderAtrCalculator.onHistoricalData`; `SimpleMovingAverageTracker.onHistoricalData`; `RsiTracker.onHistoricalData`; `MinuteVolumeTracker.onHistoricalData`; `MinuteBarHandler.onHistoricalData` |
@@ -185,6 +186,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `Map<Integer, List<Double>> historyBuffer = new ConcurrentHashMap<>()` | `SimpleMovingAverageTracker` |
 | `Map<String, Double> sum199`, `sum99`, `sum49`, `sum19`, `sum9` — all `ConcurrentHashMap` | `SimpleMovingAverageTracker` |
 | `Map<String, VolumeWindow> windows = new ConcurrentHashMap<>()` | `MinuteVolumeTracker` |
+| `Set<String> formatConfirmed = ConcurrentHashMap.newKeySet()` | `PriceTickHandler` |
 | `Map<String, Long> lastUpdateTimestampMap = new ConcurrentHashMap<>()` | `BlackboardMonitor` |
 
 `Collections.synchronizedList(new ArrayList<>())` is the value type inserted into `historyBuffer` by `IntradayWilderAtrTracker.onHistoricalData`, `DailyWilderAtrCalculator.onHistoricalData`, `RsiTracker.onHistoricalData`, and `SimpleMovingAverageTracker.onHistoricalData`.
@@ -555,7 +557,7 @@ Compare-and-set / read-modify-write call sites:
 | `MinuteVolumeTracker.VolumeWindow` | `sessionDate` | `LocalDate`, guarded by the window monitor | `commit` |
 | `MinuteVolumeTracker.VolumeWindow` | `pending` | `MinuteBar`, guarded by the window monitor | `setPending` |
 
-`PriceTickHandler`, `SizeTickHandler`, `MinuteBarHandler`, `AccountEventHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, and `MarginPacer` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
+`SizeTickHandler`, `MinuteBarHandler`, `AccountEventHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, and `MarginPacer` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
 
 ### 3.25 `mwd.trading.ui.BlackboardMonitor`
 

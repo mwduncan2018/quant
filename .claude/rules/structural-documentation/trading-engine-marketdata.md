@@ -269,7 +269,7 @@ Both public methods delegate to `updateLastMinuteBar`.
 
 ### 1. Class/Interface Responsibilities
 
-Routes IBKR price ticks and tick-by-tick price callbacks to the matching `Stock` setter using `TickMap` field resolution, and records `LAST_PRICE`, `PREVIOUS_CLOSE`, and `DAILY_VWAP` in `MarketDataInputStore`.
+Routes IBKR price ticks and tick-by-tick price callbacks to the matching `Stock` setter using `TickMap` field resolution, and records `LAST_PRICE`, `PREVIOUS_CLOSE`, and `DAILY_VWAP` in `MarketDataInputStore`. `DAILY_VWAP` comes from the `RT_VOLUME` string tick rather than a price tick, because IBKR defines no VWAP price-tick field.
 
 ### 2. Injected Dependencies
 
@@ -288,6 +288,8 @@ Constructor: `public PriceTickHandler(Blackboard blackboard, RequestRegistry reg
 public PriceTickHandler(Blackboard blackboard, RequestRegistry registry, TickMap tickMap, MarketDataInputStore inputStore)
 
 public void onTickPrice(int reqId, int field, double price, TickAttrib attribs)
+public void onTickString(int reqId, int tickType, String value)
+static double parseRealTimeVolumeVwap(String payload)
 public void onTickByTickBidAsk(int reqId, double bidPrice, double askPrice)
 public void onTickByTickAllLast(int reqId, double price)
 ```
@@ -296,13 +298,16 @@ public void onTickByTickAllLast(int reqId, double price)
 
 **Concurrent collections**
 
-Holds none.
+| Field | Declared type |
+| --- | --- |
+| `formatConfirmed` | `Set<String>` = `ConcurrentHashMap.newKeySet()` — symbols whose first `RT_VOLUME` payload has been logged |
 
 **Centralized state objects (`Blackboard`) and `MarketDataInputStore`**
 
 | Method | Interaction |
 | --- | --- |
-| `onTickPrice(int, int, double, TickAttrib)` | Reads `registry.getTickerFor(int)` and `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow/isVwap(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk`, `setLastPrice`, `setMarkPrice`, `setOpen`, `setPreviousClose`, `setDailyHigh`, `setDailyLow`, `setDailyVWAP`; mutates `inputStore.record(...)` for `LAST_PRICE`, `PREVIOUS_CLOSE`, `DAILY_VWAP` |
+| `onTickPrice(int, int, double, TickAttrib)` | Reads `registry.getTickerFor(int)` and `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk`, `setLastPrice`, `setMarkPrice`, `setOpen`, `setPreviousClose`, `setDailyHigh`, `setDailyLow`; mutates `inputStore.record(...)` for `LAST_PRICE` and `PREVIOUS_CLOSE` |
+| `onTickString(int, int, String)` | Ignores any `tickType` other than `TickType.RT_VOLUME` (48) and any blank payload; reads `registry.getTickerFor(int)`; mutates `stock.setDailyVWAP(double)` and `inputStore.record(ticker, MarketDataInput.DAILY_VWAP)`; mutates the `formatConfirmed` key set once per symbol |
 | `onTickByTickBidAsk(int, double, double)` | Reads `registry.getTickerFor(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk` |
 | `onTickByTickAllLast(int, double)` | Reads `registry.getTickerFor(int)`; mutates `stock.setLastPrice(double)` and `inputStore.record(ticker, MarketDataInput.LAST_PRICE)` |
 
