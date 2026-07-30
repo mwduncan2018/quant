@@ -39,6 +39,7 @@ public abstract class AbstractStrategy implements Runnable {
     protected final TradingGate tradingGate;
     protected final MarketDataFreshness marketDataFreshness;
 
+    private final EntryAdmission entryAdmission;
     private final Set<String> universe;
     private final Clock clock;
     private final ConcurrentMap<String, PendingEntry> pendingEntries = new ConcurrentHashMap<>();
@@ -80,6 +81,7 @@ public abstract class AbstractStrategy implements Runnable {
         this.tradingGate = Objects.requireNonNull(tradingGate, "tradingGate");
         this.marketDataFreshness = Objects.requireNonNull(marketDataFreshness, "marketDataFreshness");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.entryAdmission = new EntryAdmission(this.blackboard);
 
         Set<String> normalizedUniverse = new LinkedHashSet<>();
         for (String ticker : Objects.requireNonNull(universe, "universe")) {
@@ -169,21 +171,13 @@ public abstract class AbstractStrategy implements Runnable {
         if (!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)) {
             return;
         }
-        if (!blackboard.tryAcquireGlobalPending(strategyId, stock.getTicker())) {
-            return;
-        }
-
-        boolean positionReserved = false;
-        boolean stateReserved = false;
-        try {
-            positionReserved = blackboard.tryReservePosition(stock.getTicker(), strategyId);
-            if (!positionReserved) {
-                return;
-            }
-
-            stateReserved = stock.getState().compareAndSet(
-                    Stock.PositionState.FLAT, Stock.PositionState.PENDING);
-            if (!stateReserved) {
+        // Everything above is advisory: it can be recomputed freely because
+        // nothing has been claimed yet. From here the entry holds engine-wide
+        // state, so every exit path must resolve the reservation exactly once.
+        // Closing without keeping releases, so a path nobody considered frees
+        // the lock instead of parking every strategy.
+        try (EntryAdmission.Reservation reservation = entryAdmission.tryAdmit(strategyId, stock)) {
+            if (reservation == null) {
                 return;
             }
 
@@ -191,13 +185,13 @@ public abstract class AbstractStrategy implements Runnable {
                     || !marketDataFreshness.areAllFresh(
                             stock.getTicker(), requiredEntryInputs())
                     || !isEntryConditionMet(stock)) {
-                rollbackEntryReservation(stock, strategyId);
+                rollbackEntryReservation(stock, reservation);
                 return;
             }
 
             entryPrice = calculateEntryPrice(stock);
             if (!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)) {
-                rollbackEntryReservation(stock, strategyId);
+                rollbackEntryReservation(stock, reservation);
                 return;
             }
 
@@ -205,41 +199,45 @@ public abstract class AbstractStrategy implements Runnable {
                     calculateSliceIntents(stock, entryPrice);
             Decimal totalQuantity = totalQuantity(sliceIntents);
             if (totalQuantity.compareTo(Decimal.ZERO) <= 0) {
-                rollbackEntryReservation(stock, strategyId);
+                rollbackEntryReservation(stock, reservation);
                 return;
             }
 
-            pendingEntries.put(stock.getTicker(), new PendingEntry(clock.millis()));
-            // Recorded before the send. If the submission outcome is uncertain
-            // the order may still have reached IBKR, so the next entry must
-            // wait for a fresh account snapshot either way.
-            blackboard.recordEntrySubmitted(clock.millis());
-            BracketOrder bracketOrder = bracketOrderGateway.placeTripleThreat(
-                    strategyId,
-                    tradeDirection(),
-                    stock.getTicker(),
-                    totalQuantity,
-                    entryPrice,
-                    sliceIntents);
-            if (bracketOrder == null || stock.getActiveBracket() != bracketOrder) {
-                throw new IllegalStateException("Order gateway did not install the returned bracket");
-            }
-        } catch (UncertainOrderSubmissionException exception) {
-            escalate(stock, "Entry submission is unresolved and requires broker reconciliation");
-            throw exception;
-        } catch (RuntimeException exception) {
-            if (stock.getActiveBracket() == null) {
-                rollbackEntryReservation(stock, strategyId);
-            } else {
-                escalate(stock, "Entry submission outcome is unresolved");
-            }
-            throw exception;
-        } finally {
-            if (!positionReserved) {
-                blackboard.releaseGlobalPending(strategyId, stock.getTicker());
-            } else if (!stateReserved) {
-                blackboard.releasePosition(stock.getTicker(), strategyId);
-                blackboard.releaseGlobalPending(strategyId, stock.getTicker());
+            try {
+                pendingEntries.put(stock.getTicker(), new PendingEntry(clock.millis()));
+                // Recorded before the send. If the submission outcome is uncertain
+                // the order may still have reached IBKR, so the next entry must
+                // wait for a fresh account snapshot either way.
+                blackboard.recordEntrySubmitted(clock.millis());
+                BracketOrder bracketOrder = bracketOrderGateway.placeTripleThreat(
+                        strategyId,
+                        tradeDirection(),
+                        stock.getTicker(),
+                        totalQuantity,
+                        entryPrice,
+                        sliceIntents);
+                if (bracketOrder == null || stock.getActiveBracket() != bracketOrder) {
+                    throw new IllegalStateException(
+                            "Order gateway did not install the returned bracket");
+                }
+                // The order is away. Ownership passes to the pending-entry
+                // lifecycle, which releases the engine-wide lock on
+                // acknowledgement and the ticker when the trade resolves.
+                reservation.keep();
+            } catch (UncertainOrderSubmissionException exception) {
+                // The order may be live at IBKR. Giving the reservation back
+                // would let a second entry size against a position that exists.
+                reservation.keep();
+                escalate(stock, "Entry submission is unresolved and requires broker reconciliation");
+                throw exception;
+            } catch (RuntimeException exception) {
+                if (stock.getActiveBracket() == null) {
+                    rollbackEntryReservation(stock, reservation);
+                } else {
+                    reservation.keep();
+                    escalate(stock, "Entry submission outcome is unresolved");
+                }
+                throw exception;
             }
         }
     }
@@ -328,12 +326,14 @@ public abstract class AbstractStrategy implements Runnable {
         }
     }
 
-    private void rollbackEntryReservation(Stock stock, String strategyId) {
-        stock.getState().compareAndSet(Stock.PositionState.PENDING, Stock.PositionState.FLAT);
+    /**
+     * Gives an admitted entry back. The three engine-wide holdings are unwound by
+     * the reservation; what remains here is this strategy's own bookkeeping.
+     */
+    private void rollbackEntryReservation(Stock stock, EntryAdmission.Reservation reservation) {
+        reservation.release();
         pendingEntries.remove(stock.getTicker());
         escalatedPendingEntries.remove(stock.getTicker());
-        blackboard.releasePosition(stock.getTicker(), strategyId);
-        blackboard.releaseGlobalPending(strategyId, stock.getTicker());
         if (tickStreamController.isStreamActive(stock.getTicker())) {
             tickStreamController.cancelStream(stock.getTicker());
         }
