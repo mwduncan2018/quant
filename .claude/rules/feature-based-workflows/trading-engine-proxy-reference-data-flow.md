@@ -103,7 +103,7 @@ record, and hand the record to a session-scoped store that strategies read.
 
 ### Strategy consumption (strategy threads)
 
-17. **Initiating Component:** a concrete strategy's `isEntryConditionMet(Stock)`
+17. **Initiating Component:** a concrete strategy's `isEntryConditionMet(MarketSnapshot)`
     **Method Invocation:** `marketCalendarStore.isWithinOfClose(LocalDate, Instant, Duration)` and `marketCalendarStore.sessionClose(LocalDate)`
     **Receiving Component:** `MarketCalendarStore`
 

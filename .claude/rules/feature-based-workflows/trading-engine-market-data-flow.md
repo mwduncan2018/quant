@@ -123,7 +123,7 @@ recording, and strategy consumption.
 
 ### Tick-by-tick streams
 
-20. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)` via the subclass override `evaluateTickStreamNeed(Stock, double)`
+20. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)` via the subclass override `evaluateTickStreamNeed(MarketSnapshot, double)`
     **Method Invocation:** `tickStreamController.isStreamActive(String)`, `tickStreamController.tryRequestStream(String)`, `tickStreamController.cancelStream(String)`
     **Receiving Component:** `TickByTickManager`
 

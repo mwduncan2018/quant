@@ -21,13 +21,37 @@ state, method signature, and condition below is taken verbatim from the source.
 | `FLAT` | `mwd.trading.domain.Stock.PositionState` |
 | `PENDING` | `mwd.trading.domain.Stock.PositionState` |
 | `OPEN` | `mwd.trading.domain.Stock.PositionState` |
-| `CLOSING` | `mwd.trading.domain.Stock.PositionState` |
 
 - **Owning class:** `mwd.trading.domain.Stock`
-- **Owning field:** `private final AtomicReference<PositionState> state = new AtomicReference<>(PositionState.FLAT);`
-- **Accessor:** `public AtomicReference<PositionState> getState()` — returns the mutable reference, so any holder of a `Stock` can read or write the state.
-- **Initial value:** `FLAT`
-- **`CLOSING`:** declared in the enum. No assignment of `PositionState.CLOSING` exists anywhere in the source; it is only read in `AbstractStrategy.executeLifecycle`.
+- **Owning field:** none. The state is derived, not stored.
+- **Accessors:** `public static PositionState positionStateOf(boolean owned, BracketOrder bracket)` and
+  `public PositionState positionState(boolean owned)`, which applies the static form to this
+  instance's `activeBracket`.
+- **Inputs:** whether the caller holds the ticker reservation, and `BracketOrder.getStatus()`
+  plus `getFilledQuantity()` on the active bracket.
+
+There is no transition table for this machine, because there are no transitions:
+every read recomputes the value from the two inputs above. `positionStateOf` is
+total over them:
+
+| `bracket` | `bracket.getStatus()` | Result |
+|---|---|---|
+| non-`null` | `INITIALIZED`, `WORKING_PARENT` | `PENDING` |
+| non-`null` | `PARTIAL_PARENT`, `POSITION_OPEN` | `OPEN` |
+| non-`null` | `FILLED` | `FLAT` |
+| non-`null` | `CANCELLED`, `REJECTED` | `FLAT` when `getFilledQuantity()` is `null` or zero, otherwise `OPEN` |
+| `null` | — | `PENDING` when `owned`, otherwise `FLAT` |
+
+Consequences worth stating, all verbatim from the source:
+
+- A terminal bracket reads `FLAT` while the ticker is still reserved. That is what
+  lets `AbstractStrategy.handleFlatWithLocalOwnership` notice the trade finished
+  and release the reservation.
+- A terminal status that followed a fill reads `OPEN`, because a live position was
+  left behind.
+- Ownership with no bracket reads `PENDING`: the entry has been admitted and the
+  bracket is not built yet.
+- `CLOSING` no longer exists. It was declared but never assigned.
 
 #### `BracketOrder.Status` — per-bracket order lifecycle
 
@@ -91,6 +115,7 @@ state, method signature, and condition below is taken verbatim from the source.
 | `activePositionOwners` | `Blackboard` | `private final Map<String, String> activePositionOwners = new HashMap<>();` — ticker absent / ticker → strategyName |
 | `lastEntrySubmittedAtMillis` | `Blackboard` | `AtomicLong` |
 | `pendingEntries` | `AbstractStrategy` | `ConcurrentMap<String, PendingEntry>` where `private record PendingEntry(long submittedAtMillis)` |
+| `acknowledgedStatus` | `AbstractStrategy` | `ConcurrentMap<String, BracketOrder.Status>` — the last broker status this strategy acted on, per ticker |
 | `escalatedPendingEntries` | `AbstractStrategy` | `Set<String>` (`ConcurrentHashMap.newKeySet()`) |
 | `lastUnreadyReason` | `AbstractStrategy` | `ConcurrentMap<String, String>` |
 | `isFilled` | `BracketOrder.ExitSlice` | `private boolean isFilled = false;` |
@@ -113,96 +138,83 @@ state, method signature, and condition below is taken verbatim from the source.
 
 ### 2.1 `Stock.PositionState`
 
-#### FLAT -> PENDING
+Nothing writes this state, so this section records what each derived value causes
+instead. `AbstractStrategy.executeLifecycle(Stock)` reads
+`blackboard.getPositionOwner(ticker)` once, then dispatches on
+`stock.positionState(owner != null)`.
 
-- **State Change:** `FLAT` -> `PENDING`
-- **Controlling Method:** `private void evaluateNewEntry(Stock stock, String strategyId)` (`AbstractStrategy`)
-- **Dispatch precondition** — `protected final void executeLifecycle(Stock stock)`, `case FLAT`: `blackboard.getPositionOwner(ticker)` is `null`.
-- **Transition Conditions** (evaluated in source order; all must hold):
-  1. `tradingGate.allowsNewEntries()`
-  2. `stock.isTradeable()`
-  3. `blackboard.isAccountCurrentForNewEntry()`
-  4. `entryInputsReady(stock)`
-  5. `isEntryConditionMet(stock)`
-  6. `tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)` where `entryPrice = calculateEntryPrice(stock)`
-  7. `blackboard.tryAcquireGlobalPending(strategyId, stock.getTicker())` returns `true`
-  8. `blackboard.tryReservePosition(stock.getTicker(), strategyId)` returns `true`
-  9. `stock.getState().compareAndSet(Stock.PositionState.FLAT, Stock.PositionState.PENDING)` returns `true`
+#### FLAT
 
-#### PENDING -> FLAT (reservation rollback)
+| Condition | Effect |
+|---|---|
+| `owner == null` | `evaluateNewEntry(stock, strategyId)` |
+| `strategyId.equals(owner)` | `handleFlatWithLocalOwnership(stock)` — `cleanupOwnedLifecycle` when the bracket is `null` or `isConfirmedTerminal(...)`, otherwise `escalate(stock, "Stock is FLAT while its local bracket is still non-terminal")` |
+| `owner != null` and not ours | return |
 
-- **State Change:** `PENDING` -> `FLAT`
-- **Controlling Method:** `private void rollbackEntryReservation(Stock stock, String strategyId)` (`AbstractStrategy`), executing `stock.getState().compareAndSet(Stock.PositionState.PENDING, Stock.PositionState.FLAT)`
-- **Transition Conditions** — invoked from `evaluateNewEntry` when any of:
-  - `!tradingGate.allowsNewEntries() || !marketDataFreshness.areAllFresh(stock.getTicker(), requiredEntryInputs()) || !isEntryConditionMet(stock)` (re-check after the CAS)
-  - `!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)` (re-check after `entryPrice = calculateEntryPrice(stock)`)
-  - `totalQuantity(sliceIntents).compareTo(Decimal.ZERO) <= 0`
-  - `catch (RuntimeException exception)` and `stock.getActiveBracket() == null`
+#### PENDING
 
-#### PENDING -> OPEN (strategy thread)
+| Condition | Effect |
+|---|---|
+| `strategyId.equals(owner)` | `acknowledgeStatusChange(stock, strategyId)` then `handlePendingEntry(stock)` |
+| `owner == null` | `escalate(stock, "Pending position has no strategy owner")` |
 
-- **State Change:** `PENDING` -> `OPEN`
-- **Controlling Method:** `private void handlePendingEntry(Stock stock, String strategyId)` (`AbstractStrategy`), executing `stock.getState().set(Stock.PositionState.OPEN)`
-- **Dispatch precondition** — `executeLifecycle`, `case PENDING`: `strategyId.equals(owner)`
-- **Transition Conditions** — `bracketOrder = stock.getActiveBracket()` is non-`null` and `bracketOrder.getStatus()` is one of:
-  - `PARTIAL_PARENT` → additionally `blackboard.releaseGlobalPending(strategyId, ticker)` and `escalate(stock, "Entry received a partial fill; verify position and protective exits")`
-  - `POSITION_OPEN` → additionally `releaseGlobalPending`, `pendingEntries.remove(ticker)`, `escalatedPendingEntries.remove(ticker)`
-  - `CANCELLED` or `REJECTED` **and** `!isZero(bracketOrder.getFilledQuantity())` → additionally `releaseGlobalPending` and `escalate(stock, "Terminal parent status followed a fill; verify the live position")`
+#### OPEN
 
-#### PENDING -> FLAT (confirmed terminal)
+| Condition | Effect |
+|---|---|
+| `strategyId.equals(owner)` | `acknowledgeStatusChange(stock, strategyId)`, then `manageOpenPosition(stock, snapshot(stock))` when `automatedOrderChangesAllowed(stock)` |
+| `owner == null` | `escalate(stock, "Open position has no strategy owner")` |
+| owned by another strategy | return |
 
-- **State Change:** `PENDING` -> `FLAT`
-- **Controlling Method:** `private void completeConfirmedFlat(Stock stock, String strategyId, BracketOrder bracketOrder)` (`AbstractStrategy`), executing `stock.getState().set(Stock.PositionState.FLAT)` then `cleanupOwnedLifecycle(stock, strategyId, bracketOrder)`
-- **Transition Conditions** — invoked from `handlePendingEntry` when `bracketOrder.getStatus()` is:
-  - `CANCELLED` or `REJECTED` **and** `isZero(bracketOrder.getFilledQuantity())` (`quantity == null || quantity.isZero()`)
-  - `FILLED`
+#### Edge-triggered work: `acknowledgeStatusChange(Stock, String)`
 
-#### Any state -> OPEN (IBKR reader thread)
+Deriving the state removed the lag that used to make each broker status observable
+exactly once. `acknowledgedStatus` restores that explicitly: the method returns
+immediately when `bracketOrder.getStatus()` equals the recorded value, records the
+new status, and then runs the once-per-transition work.
 
-- **State Change:** current state -> `OPEN` (unconditional `set`, no compare)
-- **Controlling Method:** `private void markPositionOpen(BracketOrder bracketOrder, Stock stock)` (`OrderLifecycleHandler`), executing `stock.getState().set(Stock.PositionState.OPEN)` then `blackboard.releaseGlobalPending(bracketOrder.getStrategyName(), bracketOrder.getTicker())`
-- **Transition Conditions** — called from:
-  - `public void onOrderStatus(int orderIdentifier, String status, Decimal filledQuantity, Decimal remainingQuantity, double averageFillPrice, long permanentIdentifier, int parentIdentifier, double lastFillPrice, int clientIdentifier, String whyHeld, double marketCapPrice)` when `bracketOrder.isParentOrderId(orderIdentifier)` and:
-    - `"Filled".equalsIgnoreCase(status)`, or
-    - `filledQuantity != null && !filledQuantity.isZero() && !isCancelledOrInactive(status)`, or
-    - `isCancelledOrInactive(status)` and `filledQuantity` non-`null`, non-zero
-  - `public void onError(int identifier, long time, int errorCode, String errorMessage, String advancedOrderRejectJson)` for `errorCode` in `{102, 110, 136, 161, 201, 321, 10147, 10148, 10197}` when `bracketOrder.isParentOrderId(identifier)` and `getFilledQuantity()` non-`null`, non-zero; **or** when `!bracketOrder.isParentOrderId(identifier)`; and for `errorCode == 202` when `isParentOrderId(identifier)` and `getFilledQuantity()` non-`null`, non-zero
-  - `public void onExecDetails(int requestIdentifier, Contract contract, Execution execution)` when `bracketOrder.isParentOrderId(execution.orderId()) && cumulativeQuantity != null && !cumulativeQuantity.isZero()`
-  - `public void onCompletedOrder(Contract contract, Order order, OrderState orderState)` when `bracketOrder.isParentOrderId(order.orderId())` and `"Filled".equalsIgnoreCase(completedStatus)`, or when `(isCancelledOrInactive(completedStatus) || "Rejected".equalsIgnoreCase(completedStatus))` and `getFilledQuantity()` non-`null`, non-zero
+| Status | Effect |
+|---|---|
+| `WORKING_PARENT` | `blackboard.releaseGlobalPending(strategyId, ticker)`. The ticker stays reserved; there is no timeout on this state |
+| `PARTIAL_PARENT` | `releaseGlobalPending`, then `escalate(stock, "Entry received a partial fill; verify position and protective exits")` |
+| `POSITION_OPEN` | `releaseGlobalPending`, `pendingEntries.remove(ticker)`, `escalatedPendingEntries.remove(ticker)` |
+| `CANCELLED`, `REJECTED` | when `!isZero(bracketOrder.getFilledQuantity())`: `releaseGlobalPending` then `escalate(stock, "Terminal parent status followed a fill; verify the live position")`. A clean terminal derives `FLAT` and is cleaned up through `handleFlatWithLocalOwnership` on the same cycle |
+| `INITIALIZED`, `FILLED` | nothing. `INITIALIZED` is the status the entry was admitted in; `FILLED` derives `FLAT` |
+| bracket is `null` | `acknowledgedStatus.remove(ticker)` and return |
 
-#### Any state -> FLAT (IBKR reader thread)
+#### The entry claim: `EntryAdmission.tryAdmit(String, Stock)`
 
-- **State Change:** current state -> `FLAT` (unconditional `set`, no compare)
-- **Controlling Method:** `private void completeConfirmedFlat(BracketOrder bracketOrder)` (`OrderLifecycleHandler`), executing `stock.getState().set(Stock.PositionState.FLAT)`, then `stock.setActiveBracket(null)` if `stock.getActiveBracket() == bracketOrder`, then `blackboard.releaseGlobalPending(...)` and `blackboard.releasePosition(...)`
-- **Transition Conditions** — called from:
-  - `onOrderStatus(...)` when `bracketOrder.isExitOrderId(orderIdentifier) && "Filled".equalsIgnoreCase(status)` and `bracketOrder.getSlices().stream().allMatch(BracketOrder.ExitSlice::isFilled)`
-  - `onOrderStatus(...)` when `isCancelledOrInactive(status) && bracketOrder.isParentOrderId(orderIdentifier)` and `(filledQuantity == null || filledQuantity.isZero())`
-  - `onError(...)` for `errorCode` in `{102, 110, 136, 161, 201, 321, 10147, 10148, 10197}` when `isParentOrderId(identifier)` and `(getFilledQuantity() == null || getFilledQuantity().isZero())`
-  - `onError(...)` for `errorCode == 202` when `isParentOrderId(identifier)` and `(getFilledQuantity() == null || getFilledQuantity().isZero())`
-  - `onCompletedOrder(...)` when `isParentOrderId(order.orderId())`, `(isCancelledOrInactive(completedStatus) || "Rejected".equalsIgnoreCase(completedStatus))`, and `(getFilledQuantity() == null || getFilledQuantity().isZero())`
-  - `onCompletedOrder(...)` when `bracketOrder.isExitOrderId(order.orderId()) && "Filled".equalsIgnoreCase(completedStatus)` and `getSlices().stream().allMatch(BracketOrder.ExitSlice::isFilled)`
+Three steps, each able to fail independently, with the unwind in reverse:
 
-#### FLAT (locally owned) -> cleanup, no state write
+1. `positions.tryAcquireGlobalPending(strategyId, ticker)` — returns `null` on failure.
+2. `positions.tryReservePosition(ticker, strategyId)` — on failure, `releaseGlobalPending` then `null`.
+3. `stock.positionState(true) != PositionState.PENDING` — on failure, `releasePosition` and `releaseGlobalPending` then `null`.
 
-- **State Change:** `FLAT` -> `FLAT` (ownership and bracket cleanup only)
-- **Controlling Method:** `private void handleFlatWithLocalOwnership(Stock stock)` (`AbstractStrategy`)
-- **Dispatch precondition** — `executeLifecycle`, `case FLAT`: `owner != null && strategyId.equals(owner)`
-- **Transition Conditions:**
-  - `bracketOrder == null || isConfirmedTerminal(bracketOrder.getStatus())` → `cleanupOwnedLifecycle(stock, strategyId(), bracketOrder)`
-  - otherwise → `escalate(stock, "Stock is FLAT while its local bracket is still non-terminal")`
+Step three is a guard rather than a write. Success returns a `Reservation` holding
+both claims; `keep()` hands them to the pending-entry lifecycle, and `release()` —
+which `close()` calls, so an unconsidered path cannot leak the lock — gives both
+back. Releasing the reservation is what returns the derived state to `FLAT`.
 
-#### CLOSING
+`AbstractStrategy.rollbackEntryReservation(Stock, EntryAdmission.Reservation)`
+calls `reservation.release()`, removes the ticker from `pendingEntries`,
+`escalatedPendingEntries`, and `acknowledgedStatus`, and cancels any tick stream.
+It is invoked from `evaluateNewEntry` when, after the claim is held:
 
-- **State Change:** none. No source location assigns `Stock.PositionState.CLOSING`.
-- **Controlling Method:** `protected final void executeLifecycle(Stock stock)`, `case CLOSING`
-- **Transition Conditions:** `blackboard.getPositionOwner(ticker) == null` → `escalate(stock, "Closing position has no strategy owner")`. No state write occurs in this branch.
+- `!tradingGate.allowsNewEntries() || !marketDataFreshness.areAllFresh(ticker, requiredEntryInputs())`
+- `!isEntryConditionMet(market)` on the post-lock snapshot
+- `!tradeDirection().acceptsEntryPrice(market.lastPrice(), entryPrice)`
+- `totalQuantity(sliceIntents).compareTo(Decimal.ZERO) <= 0`
+- `catch (RuntimeException)` and `stock.getActiveBracket() == null`
 
-#### Escalation branches that write no position state
+#### Reader-thread effects that no longer write position state
 
-- `executeLifecycle`, `case PENDING`: `owner == null` → `escalate(stock, "Pending position has no strategy owner")`
-- `executeLifecycle`, `case OPEN`: `!strategyId.equals(owner) && owner == null` → `escalate(stock, "Open position has no strategy owner")`
-- `executeLifecycle`, `case OPEN`: `strategyId.equals(owner) && automatedOrderChangesAllowed(stock)` → `manageOpenPosition(stock)`
-- `private void processSymbolSafely(Stock stock)`: on `RuntimeException`, `stock.setTradeable(false)`, and if `stock.getState().get() != Stock.PositionState.FLAT || blackboard.getPositionOwner(stock.getTicker()) != null` → `escalate(stock, "Strategy failure while a trade lifecycle is active")`
+`OrderLifecycleHandler.markPositionOpen(BracketOrder, Stock)` now only calls
+`blackboard.releaseGlobalPending(...)`; the `OPEN` reading follows from the status
+it set on the bracket. `OrderLifecycleHandler.completeConfirmedFlat(BracketOrder)`
+clears `stock.setActiveBracket(null)` when it still points at that bracket and
+releases both claims; the `FLAT` reading follows from the same. The call-site
+conditions for both are unchanged and are listed in §2.6 and the execution flow
+document.
 
 ### 2.2 `BracketOrder.Status`
 
@@ -397,7 +409,7 @@ state, method signature, and condition below is taken verbatim from the source.
 - **State Change:** `EntryOwner(strategyName, ticker)` -> `null`
   - **Controlling Method:** `public boolean releaseGlobalPending(String strategyName, String ticker)`
   - **Transition Conditions:** `expectedOwner.equals(currentOwner)` (otherwise returns `false` with no write), then `globalPendingOwner.compareAndSet(currentOwner, null)` in a retry loop
-  - **Release call sites:** `handlePendingEntry` (`WORKING_PARENT`, `PARTIAL_PARENT`, `POSITION_OPEN`, terminal-with-fill branches), `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `evaluateNewEntry`'s `finally` block (`!positionReserved`, or `positionReserved && !stateReserved`), `OrderLifecycleHandler.markPositionOpen`, `OrderLifecycleHandler.completeConfirmedFlat`
+  - **Release call sites:** `AbstractStrategy.acknowledgeStatusChange` (`WORKING_PARENT`, `PARTIAL_PARENT`, `POSITION_OPEN`, terminal-with-fill branches), `cleanupOwnedLifecycle`, `EntryAdmission.tryAdmit`'s step-two and step-three unwinds, `EntryAdmission.Reservation.release()`, `OrderLifecycleHandler.markPositionOpen`, `OrderLifecycleHandler.completeConfirmedFlat`
 
 ### 2.9 `Blackboard.activePositionOwners`
 
@@ -407,7 +419,7 @@ state, method signature, and condition below is taken verbatim from the source.
 - **State Change:** ticker owned -> ticker absent
   - **Controlling Method:** `public synchronized boolean releasePosition(String ticker, String strategyName)`
   - **Transition Conditions:** `activePositionOwners.remove(normalizedTicker, normalizedStrategy)` — removal only when the recorded owner equals `strategyName`
-  - **Release call sites:** `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `evaluateNewEntry`'s `finally` block (`positionReserved && !stateReserved`), `OrderLifecycleHandler.completeConfirmedFlat`
+  - **Release call sites:** `cleanupOwnedLifecycle`, `EntryAdmission.tryAdmit`'s step-three unwind, `EntryAdmission.Reservation.release()`, `OrderLifecycleHandler.completeConfirmedFlat`
 
 ### 2.10 `ReconciliationManager` collection epoch
 
@@ -443,10 +455,10 @@ state, method signature, and condition below is taken verbatim from the source.
   - **Controlling Method:** `public void cancelStream(String ticker)`
   - **Transition Conditions:** `activeRequests.remove(ticker) != null`; then `client.cancelTickByTickData(reqId)`, `registry.unregister(reqId)`, `activeStreamCount.decrementAndGet()`
 - **Strategy-level triggers:**
-  - `protected void evaluateTickStreamNeed(Stock stock, double entryPrice)` (`TwoSigmaDownsideMeanReversionStrategy`):
+  - `protected void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice)` (`TwoSigmaDownsideMeanReversionStrategy`):
     - request: `!isStreamActive && lastPrice <= entryPrice * 1.0025`
     - cancel: `isStreamActive && lastPrice > entryPrice * 1.0035`
-  - `protected void evaluateTickStreamNeed(Stock stock, double entryPrice)` (`OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy`): empty method bodies; no transition.
+  - `protected void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice)` (`OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy`): empty method bodies; no transition.
   - `AbstractStrategy.cleanupOwnedLifecycle` and `AbstractStrategy.rollbackEntryReservation` both cancel when `tickStreamController.isStreamActive(stock.getTicker())`.
 
 ### 2.12 Market-data input readiness (`MarketDataInputStore`)
@@ -570,11 +582,13 @@ No source location resets `systemHalted`, `systemUpdateRequired`, `openOrderEnd`
 
 ### Escalation without a state write
 
-`AbstractStrategy.handlePendingEntry` escalates without changing `PositionState` when:
+`AbstractStrategy.handlePendingEntry(Stock)` holds only the clock-driven half of the
+pending entry; everything status-driven moved to `acknowledgeStatusChange`. It
+returns unless `pendingEntry == null || acknowledgementTimedOut(pendingEntry.submittedAtMillis())`,
+and then escalates when:
 
-- `bracketOrder == null` and (`pendingEntry == null || acknowledgementTimedOut(pendingEntry.submittedAtMillis())`) → `"Pending entry has no local bracket and cannot be resolved safely"`
-- `bracketOrder.getStatus() == INITIALIZED` and (`pendingEntry == null || acknowledgementTimedOut(pendingEntry.submittedAtMillis())`) → `"IBKR did not acknowledge the entry before the configured timeout"`
-- `bracketOrder.getStatus() == WORKING_PARENT` → no escalation, no state write; `blackboard.releaseGlobalPending(strategyId, stock.getTicker())` only
+- `bracketOrder == null` → `"Pending entry has no local bracket and cannot be resolved safely"`
+- `bracketOrder.getStatus() == INITIALIZED` → `"IBKR did not acknowledge the entry before the configured timeout"`
 
 `AbstractStrategy.updateExits(Stock stock, BracketOrder bracketOrder, BracketOrder.ExitSlice exitSlice, double takeProfitPrice, double stopLossPrice, long timeExitValue)` returns without acting when
-`stock.getState().get() != Stock.PositionState.OPEN || !blackboard.isPositionOwnedBy(stock.getTicker(), strategyId()) || !automatedOrderChangesAllowed(stock)`.
+`stock.positionState(true) != Stock.PositionState.OPEN || !blackboard.isPositionOwnedBy(stock.getTicker(), strategyId()) || !automatedOrderChangesAllowed(stock)`.

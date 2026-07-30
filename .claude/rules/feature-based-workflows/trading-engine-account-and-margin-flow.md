@@ -28,7 +28,7 @@ per-symbol margin rates.
 | `mwd.trading.domain.Stock` | Receives `setLongMarginRate` / `setShortMarginRate` and the corresponding verified flags, plus the portfolio fields. |
 | `mwd.trading.reconciliation.ReconciliationManager` | Receives `position` and `updatePortfolio` payloads alongside the `Stock` writes. |
 | `mwd.trading.strategy.AbstractStrategy` | Reads `blackboard.isAccountCurrentForNewEntry()` before evaluating an entry and calls `recordEntrySubmitted` before submitting one. |
-| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Reads `stock.isLongMarginRateVerified()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, `stock.calculateMarginRequirement(String, Decimal, double)`, `stock.getLongMarginRate()`. |
+| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Reads `market.longMarginRateVerified()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, `market.marginRequirement(String, Decimal, double)`, `market.longMarginRate()`. |
 
 ## 2. Execution Path
 
@@ -80,9 +80,9 @@ per-symbol margin rates.
     **Method Invocation:** `blackboard.recordEntrySubmitted(clock.millis())` immediately before `placeTripleThreat`
     **Receiving Component:** `Blackboard` (`AtomicLong.updateAndGet`)
 
-12. **Initiating Component:** the concrete strategy's `calculateTotalQuantity(Stock, double, double)`
-    **Method Invocation:** `blackboard.getAccount()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, `stock.calculateMarginRequirement("BUY", Decimal, double)`, `stock.getLongMarginRate()`
-    **Receiving Component:** `Account`, `Stock`
+12. **Initiating Component:** the concrete strategy's `calculateTotalQuantity(MarketSnapshot, double, double)`
+    **Method Invocation:** `blackboard.getAccount()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, `market.marginRequirement("BUY", Decimal, double)`, `market.longMarginRate()` — the rate is the one captured in the snapshot, so the quantity matches the rate the direction was verified against
+    **Receiving Component:** `Account`, `MarketSnapshot`
 
 ### Margin what-if cycle (`Margin-Pacer-Thread`)
 
@@ -114,9 +114,9 @@ per-symbol margin rates.
     **Method Invocation:** `order.action() == Action.BUY` (`com.ib.client.Types.Action`) → `stock.setLongMarginRate(double)` + `stock.setLongMarginRateVerified(true)`; otherwise `stock.setShortMarginRate(double)` + `stock.setShortMarginRateVerified(true)`
     **Receiving Component:** `Stock`
 
-20. **Initiating Component:** `TwoSigmaDownsideMeanReversionStrategy.isEntryConditionMet(Stock)`
-    **Method Invocation:** `stock.isLongMarginRateVerified()`; false blocks the entry
-    **Receiving Component:** `Stock`
+20. **Initiating Component:** `TwoSigmaDownsideMeanReversionStrategy.isEntryConditionMet(MarketSnapshot)`
+    **Method Invocation:** `market.longMarginRateVerified()`; false blocks the entry
+    **Receiving Component:** `MarketSnapshot`
 
 21. **Initiating Component:** `Trading-Engine-Shutdown` hook thread
     **Method Invocation:** `marginPacerThread.interrupt()`
