@@ -332,7 +332,7 @@ Compare-and-set / read-modify-write call sites:
 |---|---|---|
 | `accountId` | `volatile String` | `setAccountId` |
 | `lastRefreshedAtMillis` | `volatile long` | `setLastRefreshedAtMillis` |
-| `netLiquidation`, `totalCashValue`, `settledCash`, `buyingPower`, `availableFunds`, `excessMargin`, `realizedPnL`, `unrealizedPnL`, `cushion` | `volatile double` | `setNetLiquidation`, `setTotalCashValue`, `setSettledCash`, `setBuyingPower`, `setAvailableFunds`, `setExcessMargin`, `setRealizedPnL`, `setUnrealizedPnL`, `setCushion` |
+| `netLiquidation`, `totalCashValue`, `settledCash`, `buyingPower`, `availableFunds`, `excessLiquidity`, `realizedPnL`, `unrealizedPnL`, `cushion` | `volatile double` | `setNetLiquidation`, `setTotalCashValue`, `setSettledCash`, `setBuyingPower`, `setAvailableFunds`, `setExcessLiquidity`, `setRealizedPnL`, `setUnrealizedPnL`, `setCushion` |
 
 ### 3.4 `mwd.trading.strategy.AbstractStrategy`
 
@@ -555,7 +555,9 @@ Compare-and-set / read-modify-write call sites:
 | `MinuteVolumeTracker.VolumeWindow` | `sessionDate` | `LocalDate`, guarded by the window monitor | `commit` |
 | `MinuteVolumeTracker.VolumeWindow` | `pending` | `MinuteBar`, guarded by the window monitor | `setPending` |
 
-`SizeTickHandler`, `MinuteBarHandler`, `AccountEventHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, `UniverseReference`, and `ConcentrationLimits` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
+`SizeTickHandler`, `MinuteBarHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, `UniverseReference`, and `ConcentrationLimits` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
+
+`AccountEventHandler` holds one of its own: `reportedUnhandledKeys`, a `ConcurrentHashMap.newKeySet()` that makes the DEBUG line for an unread account tag fire once rather than on every batch. It is written only on the reader thread, and would be correct unsynchronized; the concurrent set states the intent rather than relying on that.
 
 ### 3.25 `mwd.trading.ui.BlackboardMonitor`
 

@@ -166,14 +166,14 @@ Traces a new entry from the strategy poll loop through bracket construction and
     **Receiving Component:** `ReconciliationManager`, `OrderRegistry`, `BracketOrder`
 
 29. **Initiating Component:** `OrderLifecycleHandler.onOrderStatus(...)` for the parent leg
-    **Method Invocation:** `bracketOrder.setFilledQuantity(Decimal)` / `setRemainingQuantity(Decimal)`; `"Filled"` → `setStatus(POSITION_OPEN)` + `markPositionOpen(BracketOrder, Stock)`; a non-zero partial fill → `setStatus(PARTIAL_PARENT)` + `markPositionOpen` + `halt(String)`; a working status → `setStatus(WORKING_PARENT)`
+    **Method Invocation:** `bracketOrder.setFilledQuantity(Decimal)` / `setRemainingQuantity(Decimal)`; `"Filled"` → `setStatus(POSITION_OPEN)` + `markPositionOpen(BracketOrder)`; a non-zero partial fill → `setStatus(PARTIAL_PARENT)` + `markPositionOpen` + `halt(String)`; a working status → `setStatus(WORKING_PARENT)`
     **Receiving Component:** `BracketOrder`, `Stock`, `Blackboard`, `TradingGate`
 
 30. **Initiating Component:** `OrderLifecycleHandler.onOrderStatus(...)` for an exit leg
     **Method Invocation:** `bracketOrder.getSliceByOrderId(int)` → `filledSlice.setFilled(true)`; when every slice reports `isFilled()` → `setStatus(FILLED)` + `completeConfirmedFlat(BracketOrder)`
     **Receiving Component:** `BracketOrder.ExitSlice`, `BracketOrder`, `Stock`, `Blackboard`
 
-31. **Initiating Component:** `OrderLifecycleHandler.markPositionOpen(BracketOrder, Stock)`
+31. **Initiating Component:** `OrderLifecycleHandler.markPositionOpen(BracketOrder)`
     **Method Invocation:** `blackboard.releaseGlobalPending(String, String)`. No position state is written; `OPEN` follows from the `Status` the caller set on the bracket
     **Receiving Component:** `Stock`, `Blackboard`
 

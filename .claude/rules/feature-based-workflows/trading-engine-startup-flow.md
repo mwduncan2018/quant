@@ -100,7 +100,7 @@ the TWS API handshake to the point where strategy threads are running.
     **Receiving Component:** `EarningsRefresher`, `MarketCalendarRefresher`
 
 11a. **Initiating Component:** `Main`
-    **Method Invocation:** `UniverseReference.load(Path.of(config.getUniverseReferencePath()), MarginMethodology.parse(config.getMarginMethodology()), config.getDefaultLongMarginRate(), config.getDefaultShortMarginRate())`, then `describeCoverage(...)` logged line by line and `ageInDays(...)` warned past `config.getUniverseReferenceMaxAgeDays()`
+    **Method Invocation:** `UniverseReference.load(Path.of(config.getUniverseReferencePath()), config.getMarginMethodology(), config.getDefaultLongMarginRate(), config.getDefaultShortMarginRate())`, then `describeCoverage(...)` logged line by line and `ageInDays(...)` warned past `config.getUniverseReferenceMaxAgeDays()`
     **Receiving Component:** `UniverseReference`
 
 11b. **Initiating Component:** `Main`

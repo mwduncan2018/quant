@@ -17,7 +17,8 @@ A Java 25 automated equity-trading engine built around the Interactive Brokers T
 | IBKR socket lifecycle | Implemented | Connects, starts the reader thread, reacts to important connectivity errors, and schedules reconnects. |
 | Market-data subscriptions | Implemented with limitations | Requests daily history, updating one-minute history, and live or delayed ticks for strategy and reference symbols. |
 | Indicators and shared state | Implemented | Maintains prices, bars, ATR, RSI, the rolling minute-volume baseline, and simple moving averages in the `Blackboard`, with per-input readiness tracked in `MarketDataInputStore`. |
-| Account and margin state | Implemented | Receives account callbacks and periodically submits IBKR what-if BUY and SELL orders for margin estimates. Each direction's rate is verified independently. |
+| Account state | Implemented | Receives account callbacks. `ExcessLiquidity` is read under the tag IBKR actually sends. |
+| Margin rates and concentration | Implemented; **the rate table is empty** | Per-ticker rates and GICS sectors load from `data/universe-reference.csv`, and per-ticker and per-sector caps reduce every entry. No rate has been collected yet, so all 30 symbols fall back to the conservative default. |
 | Local trading-state journal | Implemented | Atomically writes order intent and broker acknowledgements to a JSON file with a backup. |
 | Startup/reconnect reconciliation | Implemented | Collects a complete broker snapshot and blocks automation on any mismatch or timeout. It does not automatically alter broker state. |
 | Bracket-order execution | Implemented and wired | `BracketOrderExecutor` supports a parent entry plus independent take-profit, stop-loss, and timed exits for each slice. Both strategies submit through the same instance. |
@@ -133,10 +134,105 @@ account would make every strategy acquire and release the lock on each poll for
 no purpose.
 
 `AvailableFunds` is the field sizing compares against, and it is the correct
-one: `calculateMarginRequirement` already applies the margin rate, so it is a
-dollar requirement to be met by un-leveraged equity. `BuyingPower` is that same
-equity multiplied by leverage — comparing against it would apply the multiple
-twice and permit roughly four times the intended size.
+one. Each strategy's `calculateTotalQuantity` computes `shares × entryPrice ×
+marginRate`, so the figure it produces is already a dollar requirement to be met
+by un-leveraged equity. `BuyingPower` is that same equity multiplied by leverage
+— comparing against it would apply the multiple twice and permit roughly four
+times the intended size.
+
+### Margin rates
+
+Sizing multiplies against a per-ticker margin rate, and that rate is **read from a
+file rather than measured**.
+
+It used to be measured. `MarginPacer` submitted a what-if BUY and a what-if SELL
+per symbol every five minutes and read `initMarginChange` off the returned
+`OrderState`. IBKR asks for at most one what-if per minute and one per ten real
+order submissions; with 31 symbols on a five-minute cycle that loop ran at
+roughly **twelve a minute**, some 4,600 a session, and cancelled none of them. It
+also swept SPY, which is reference-only and never traded. It is gone.
+
+`data/universe-reference.csv` replaces it, one row per symbol:
+
+```text
+ticker,sector,regt_long,regt_short,pm_long,pm_short
+```
+
+Collect the rates from [IBKR's margin calculator](https://www.interactivebrokers.com/en/trading/margin-calculator.php).
+`UniverseReference` loads the file once at startup and is immutable afterwards,
+so no synchronization is involved in reading a rate.
+
+Four properties of the loader are deliberate:
+
+- **A blank rate falls back to a conservative default** — `DEFAULT_LONG_MARGIN_RATE`
+  and `DEFAULT_SHORT_MARGIN_RATE`, both 0.50 — set *higher* than a typical
+  requirement, so a symbol added to a universe and forgotten here under-sizes
+  rather than over-leverages.
+- **A missing file is not a startup failure.** Refusing to start over an unfilled
+  reference table is worse than starting on defaults and saying so. Startup logs
+  every traded symbol with no row and every symbol falling back.
+- **A malformed sector or an out-of-range rate fails the whole file.** A typo that
+  silently dropped a symbol out of its sector total would weaken a limit without
+  saying so.
+- **The table's age is warned past `UNIVERSE_REFERENCE_MAX_AGE_DAYS`.** IBKR
+  reprices margin without notice, so an old table is a silent sizing error. That
+  warning is what replaces the signal the what-if loop used to provide.
+
+> [!IMPORTANT]
+> **`MARGIN_METHODOLOGY` has no default and the engine will not start without
+> it.** It must be `REG_T` or `PORTFOLIO`.
+>
+> Under Reg-T the initial requirement for long equity is the Federal Reserve's
+> flat 50%, identical for every marginable symbol, and per-symbol variation
+> appears only where IBKR imposes a house requirement above it. Under Portfolio
+> Margin the requirement comes from the TIMS risk model — IBKR sweeps each
+> position through simulated valuation moves of roughly ±15%, raises its stress
+> factors during volatility, and can therefore **increase the requirement while
+> prices are flat**. The two regimes size the same position differently and fail
+> differently, so `EnvPropConfig` throws from its constructor rather than guess
+> which one the account is on.
+
+The engine does not yet *confirm* the declared regime against IBKR's own figures.
+Confirmation would compare what IBKR charges against `RegTMargin`, and whether
+that tag reaches an engine subscribed with `reqAccountUpdates` rather than
+`reqAccountSummary` is an open question — `AccountEventHandler` logs each unread
+account tag once at DEBUG so one live session settles it.
+
+### Concentration limits
+
+`ConcentrationLimits` caps how much of the account may ride on one symbol and on
+one sector. This is account-level policy rather than strategy logic, and it has
+to be shared: two strategies both entering technology names must see the same
+sector total or neither limit means anything. **It only ever reduces** the
+quantity a strategy asked for.
+
+| Setting | Default | Meaning |
+| --- | ---: | --- |
+| `MAX_TICKER_EXPOSURE_PCT` | 30 | Percent of net liquidation on one symbol |
+| `MAX_SECTOR_EXPOSURE_PCT` | 50 | Percent of net liquidation in one GICS sector |
+| `MIN_POSITION_NOTIONAL` | 2000 | Below this the trimmed entry is abandoned rather than shipped |
+
+Both limits apply under either margin regime. Concentration is how much is at
+stake on one name; the regime only decides how much the broker lends against it.
+
+**Exposure counts working entries, not just filled positions.** The engine-wide
+entry lock is released on acknowledgement rather than on fill, so a second entry
+can be admitted while the first still rests at the exchange. Reading only
+`Stock.positionSize` would show nothing for it and let two same-sector entries
+each pass the check and both fill. A partially filled bracket contributes its
+filled half through the position size and its remainder through the bracket,
+which composes rather than double-counting.
+
+When the cap allows less than the strategy asked for, `trimToTotal` scales every
+slice proportionally and gives the rounding loss to the first, because
+`validateEntryIntent` requires the parts to sum exactly to the parent. If any
+slice would round to **zero** the entry is abandoned instead: the strategy chose
+how many exits the position has, and shipping fewer would hand it a shape it
+never asked for.
+
+One honest gap: a symbol with no row in the reference table has no sector, so
+only the per-ticker cap can be enforced for it and its exposure is invisible to
+every other symbol's sector total. That is a hole in the file, named at startup.
 
 ### Entry and position ownership
 
@@ -144,6 +240,7 @@ The strategy framework provides these safeguards:
 
 - one owning strategy per symbol;
 - a configured maximum number of active positions;
+- per-ticker and per-sector exposure caps shared across strategies;
 - global serialization of unacknowledged entry submissions;
 - direction-specific limit-price acceptance for long and short trades;
 - market-data freshness checks before entry evaluation and immediately before submission;
@@ -152,6 +249,48 @@ The strategy framework provides these safeguards:
 - per-symbol exception containment so one symbol cannot stop every strategy cycle;
 - cleanup only after a confirmed flat or zero-fill terminal outcome;
 - retained ownership when broker state is uncertain.
+
+#### How a decision is assembled
+
+Four pieces carry that list, and each exists to remove a specific way the old
+shape could disagree with itself.
+
+**Position state is derived, never stored.** `Stock.positionStateOf(boolean
+owned, BracketOrder bracket)` computes `FLAT` / `PENDING` / `OPEN` from the
+bracket's status and the caller's ownership answer. There is no field to write,
+so the IBKR reader thread and a strategy thread cannot hold different views of
+the same symbol. A terminal bracket reads `FLAT` while the ticker is still
+reserved, which is what lets cleanup notice the trade finished; a terminal status
+that followed a fill reads `OPEN`, because a live position was left behind.
+
+**Each decision reads one frozen view.** `Stock` holds every market-data figure
+in its own `volatile` field, written as ticks arrive, so a strategy reading those
+fields directly could assemble one decision from several different moments in the
+tape. `MarketSnapshot.of(Stock, long)` takes them in a single pass, and every
+strategy hook that reads market data takes the snapshot instead. `evaluateNewEntry`
+takes two: one to screen with, and a second **after** the entry lock is held —
+that second one is the only view the order is built from, so the price the gate
+approved is the price the order rests at.
+
+**The entry claim lives in one place.** `EntryAdmission.tryAdmit` performs the
+three steps — take the engine-wide pending lock, reserve the ticker, confirm the
+symbol still derives `PENDING` — and unwinds in reverse on any failure. It hands
+back an `AutoCloseable` `Reservation`; `keep()` passes both claims to the
+pending-entry lifecycle and `close()` releases them, so a path nobody considered
+frees the engine-wide lock rather than parking every strategy behind it.
+
+**Broker statuses are acknowledged exactly once.** Deriving the state removed the
+lag that used to make each status observable a single time, so
+`acknowledgedStatus` restores it explicitly: a per-ticker map of the last status
+this strategy acted on. Releasing the global lock on `WORKING_PARENT`, escalating
+a partial fill, and clearing the pending maps on `POSITION_OPEN` are all
+edge-triggered off it rather than off a poll.
+
+Strategies also see a narrowed blackboard. `StrategyBlackboard` composes
+`PositionLedger` (the two claims) and `StockLookup` (`getStock`) plus the account
+gate and the halt switch. A strategy holding that type cannot allocate an IBKR
+order ID, reach `OrderRegistry`, or iterate every symbol. `Blackboard` implements
+it, so nothing else changed at the call sites.
 
 ## Startup and reconnect lifecycle
 
@@ -172,7 +311,6 @@ Handled IBKR connectivity codes currently include 1100, 1101, 1102, 1300, 502, 5
 The strategy code currently evaluates:
 
 - time before 3:00 PM New York;
-- verified long margin information;
 - a Static Daily Implied Move and SPY Gamma Flip that the options proxy marked valid for the current session and delivered recently;
 - fresh SPY data and SPY at or above the proxy's gamma flip;
 - a structural level at previous close minus two static daily implied moves;
@@ -182,7 +320,7 @@ The strategy code currently evaluates:
 - a close in the upper half of the minute-bar range;
 - sufficient reward from entry to daily VWAP relative to assumed risk.
 
-Position sizing targets 0.25% of net liquidation value at risk and caps size by available funds and the IBKR long-margin estimate. The bracket is divided into two equal slices:
+Position sizing targets 0.25% of net liquidation value at risk, then caps size by available funds at the ticker's configured long margin rate, and finally by the per-ticker and per-sector concentration limits. The 0.25% figure is hardcoded in this strategy rather than shared or configured, so a change to one strategy's risk budget can never move another's. The bracket is divided into two equal slices:
 
 - one mathematical profit target at one implied move above entry;
 - one VWAP target;
@@ -199,7 +337,8 @@ Open-position management contains break-even adjustments, a VWAP target adjustme
 | Session VWAP | IBKR `RT_VOLUME` string tick (generic tick 233) | Wired; **requires a real-time subscription** |
 | Daily history and simple moving averages | IBKR historical data | Wired |
 | Updating one-minute bars, ATR, RSI, and the minute-volume baseline | IBKR updating historical data | Wired |
-| Account values and margin rates | IBKR account callbacks and what-if orders | Wired |
+| Account values | IBKR account callbacks (`reqAccountUpdates`) | Wired |
+| Per-ticker margin rates and sectors | `data/universe-reference.csv` via `UniverseReference` | Wired; **file has no rates yet** |
 | Static Daily Implied Move | Options-proxy UDP frames via `OptionsIndicatorStore` | Wired |
 | SPY gamma flip | Options-proxy UDP frames via `OptionsIndicatorStore` | Wired |
 | Per-input validity, coverage, and readiness | `MarketDataInputStore` | Wired |
@@ -311,25 +450,28 @@ volume-climax lock could never pass and the strategy could not open a position.
 src/main/java/mwd/trading/
 ├── app/             Application composition and startup
 ├── broker/ibkr/     IBKR session, EWrapper dispatch, IDs, requests, and callbacks
+├── calendar/        Session hours and market days pulled from the proxy
 ├── config/          Properties and environment-variable configuration
 ├── domain/          Account, stock, and trade-direction state
-├── earnings/        Optional earnings-cache loader
+├── earnings/        Earnings dates pulled from the proxy
 ├── execution/       Bracket construction, order registry, and order lifecycle
 ├── indicator/       ATR, RSI, volume, and moving-average calculations/trackers
 ├── lifecycle/       Engine modes and the global trading gate
-├── marketdata/      Subscription lifecycle and tick/bar handlers
+├── marketdata/      Subscription lifecycle, tick/bar handlers, per-decision snapshots
 ├── optionsproxy/    UDP protobuf receiver and validated indicator store
 ├── persistence/     Atomic JSON trading-state journal
+├── proxy/           Shared HTTP/JSON fetch used by earnings and calendar
 ├── reconciliation/  Broker snapshot collection and comparison
-├── risk/            IBKR what-if margin pacing
-├── state/           Shared Blackboard and ownership controls
-├── strategy/        Strategy framework and concrete strategies
+├── risk/            Margin regime, per-ticker reference table, concentration caps
+├── state/           Shared Blackboard, narrow strategy views, ownership controls
+├── strategy/        Strategy framework, entry admission, concrete strategies
 └── ui/              Optional Swing Blackboard monitor
 
 src/test/java/       JUnit tests
 src/main/proto/      Options-proxy wire contract; generates Java during the build
 src/main/resources/  Runtime configuration and Log4j configuration
-data/                Runtime-generated state files; ignored by Git
+data/                Runtime state files, ignored by Git, **except**
+                     universe-reference.csv, which is committed
 logs/                Rolling session logs; ignored by Git
 ```
 
@@ -396,7 +538,7 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 | `SHOW_UI` | `false` | Opens the Swing Blackboard monitor when true. |
 | `STRATEGY_POLL_RATE_MS` | `16` | Delay between complete strategy-universe cycles once a strategy is started. |
 | `ENTRY_ACKNOWLEDGEMENT_TIMEOUT_MS` | `10000` | Time before an unacknowledged entry is escalated. |
-| `MAX_ACTIVE_POSITIONS` | `3` | Maximum number of symbols reserved across strategies, counting pending entries. The primary control on total leverage. |
+| `MAX_ACTIVE_POSITIONS` | `3` | Maximum number of symbols reserved across strategies, counting pending entries. |
 | `STRATEGY_TWO_SIGMA_DOWNSIDE_UNIVERSE` | 30 equities | Symbols the downside strategy may trade. |
 | `STRATEGY_TWO_SIGMA_DOWNSIDE_REFERENCE_SYMBOLS` | `SPY` | Non-traded symbols required by the strategy. |
 | `IBKR_HOST` | `127.0.0.1` | TWS or Gateway API host. |
@@ -408,6 +550,14 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 | `OPTIONS_PROXY_BIND_HOST` | `127.0.0.1` | Local address the UDP socket binds to. Use the Ethernet address when the proxy runs on the other laptop. |
 | `OPTIONS_PROXY_UDP_PORT` | `5005` | Local UDP port. Must match the proxy's `UDP_PORT`. |
 | `OPTIONS_PROXY_FRAME_MAX_AGE_MS` | `5000` | Age beyond which the newest frame stops satisfying new entries. The proxy broadcasts once per second by default. |
+| `MARGIN_METHODOLOGY` | `REG_T` in the file; **no default in code** | `REG_T` or `PORTFOLIO`. Selects which pair of rates in the reference table applies. Absent or unrecognised throws at startup. |
+| `UNIVERSE_REFERENCE_PATH` | `data/universe-reference.csv` | Per-ticker sectors and margin rates. A missing file logs and falls back to defaults rather than refusing to start. |
+| `DEFAULT_LONG_MARGIN_RATE` | `0.50` | Rate used when a ticker has no row or a blank long rate. Deliberately conservative. |
+| `DEFAULT_SHORT_MARGIN_RATE` | `0.50` | Same, for the short side. |
+| `UNIVERSE_REFERENCE_MAX_AGE_DAYS` | `30` | Age past which the table's `# retrieved:` date triggers a startup warning. |
+| `MAX_TICKER_EXPOSURE_PCT` | `30` | Percent of net liquidation permitted on one symbol, filled plus working. |
+| `MAX_SECTOR_EXPOSURE_PCT` | `50` | Percent of net liquidation permitted in one GICS sector. |
+| `MIN_POSITION_NOTIONAL` | `2000` | An entry trimmed below this is abandoned rather than shipped. |
 | `MARKET_DATA_MAX_AGE_MS` | `30000` | Age beyond which an aged IBKR input stops being usable. Must exceed the slowest input's cadence, which is the one-minute bar stream. Verify the real cadences during PAPER and tighten this. |
 | `ENGINE_LOG_DIR` | `logs` | Directory for the rolling log files. |
 | `ENGINE_LOG_NAME` | `trading-engine` | Base name of the log files. Must differ between engines sharing a working directory. |
@@ -464,6 +614,7 @@ $env:LIVE_IBKR_TRADING = 'false'   # keep false: orders stay on the paper accoun
 $env:IBKR_HOST = '127.0.0.1'
 $env:IBKR_CLIENT_ID = '20'
 $env:IBKR_EXPECTED_ACCOUNT = 'DU1234567'
+$env:MARGIN_METHODOLOGY = 'REG_T'    # required; REG_T or PORTFOLIO, no default
 $env:TRADING_STATE_PATH = 'data/trading-state-paper.json'
 $env:OPTIONS_PROXY_ENABLED = 'true'
 $env:OPTIONS_PROXY_BIND_HOST = '127.0.0.1'
@@ -484,6 +635,7 @@ export LIVE_IBKR_TRADING=true
 export IBKR_HOST=127.0.0.1
 export IBKR_CLIENT_ID=10
 export IBKR_EXPECTED_ACCOUNT=U1234567
+export MARGIN_METHODOLOGY=REG_T      # required; must match the real account
 export TRADING_STATE_PATH=data/trading-state-live.json
 export ENGINE_LOG_NAME=live-engine
 ```
@@ -638,7 +790,7 @@ answer that, and the pair covers both order directions.
 | Take profit | Daily VWAP, tracked while open | Daily VWAP, tracked while open |
 | Stop loss | Previous close **−** 1.25 × move | Previous close **+** 1.25 × move |
 | Veto | VWAP **below** previous close − 0.75 × move | VWAP **above** previous close + 0.75 × move |
-| Margin rate | Long, gated on `isLongMarginRateVerified()` | Short, gated on `isShortMarginRateVerified()` |
+| Margin rate | `universeReference.marginRate(ticker, true)` | `universeReference.marginRate(ticker, false)` |
 
 Both share the rest:
 
@@ -649,11 +801,13 @@ Both share the rest:
 | Re-entry | 15-minute per-ticker cooldown after an exit |
 | Sizing | 0.25% of net liquidation at risk |
 
-Each direction gates on its own verification flag —
-`isLongMarginRateVerified()` for the long, `isShortMarginRateVerified()` for the
-short. A single flag would have been set by *either* direction's what-if order,
-so a BUY what-if alone would have let the short size against the unpriced 1.0
-default.
+Each direction reads its own side of the reference table. The rates used to be
+measured per symbol per direction by what-if order, and each strategy gated on a
+separate `isLongMarginRateVerified()` / `isShortMarginRateVerified()` flag so a
+BUY what-if alone could not let the short size against an unpriced default. Both
+the flags and the what-if loop are gone: a configured rate is present from
+startup, and a symbol without one gets the conservative default rather than a
+gate.
 
 ### Implemented independently, on purpose
 
@@ -805,13 +959,16 @@ Before wiring or enabling any automated strategy:
 - set and verify `IBKR_EXPECTED_ACCOUNT`;
 - confirm the gate reaches `READY` only after a clean empty-state reconciliation;
 - confirm every universe and reference symbol receives the intended market-data type;
-- verify previous close, VWAP, minute bars, volume baseline, ATR, RSI, and margin fields against TWS;
+- verify previous close, VWAP, minute bars, volume baseline, ATR, RSI, and the account balances against TWS;
 - confirm the proxy is broadcasting and the engine accepts its frames, with `TICKERS` matching this engine's universe;
 - enter the SPY gamma flip for the correct `trading_date` and confirm the engine reports it valid;
 - confirm `logs/` is being written, that the startup header names the right journal and log paths, and that a deliberate restart leaves the shutdown sequence in the file;
 - confirm the engine reports the correct session close at startup, and that stopping the proxy makes entries block rather than fall back to a default close;
 - watch margin consumption as positions accumulate, and confirm `AvailableFunds` actually moves when an order is acknowledged rather than only when it fills — the account-freshness gate depends on it;
-- confirm both margin rates arrive per symbol; a short cannot enter until its own SELL what-if has been priced, which the pacer requests one interval after the BUY;
+- fill in `data/universe-reference.csv` and confirm the startup coverage report names no traded symbol as missing or defaulted;
+- confirm `MARGIN_METHODOLOGY` matches what IBKR actually applies to the account, and that starting without it fails rather than defaulting;
+- read the DEBUG lines naming unread account tags, and use them to decide what the regime confirmation and any future margin watchdog can key on;
+- confirm a trimmed entry behaves: force a ticker or sector cap to bind and check the slices still sum exactly to the parent, and that a sub-`MIN_POSITION_NOTIONAL` result is abandoned rather than sent;
 - on or before 2026-11-27, confirm an early close pulls both the entry cutoff and the time exit forward with it;
 - confirm each required input reports ready on its own schedule, and that killing the TWS data feed makes aged inputs lapse within `MARKET_DATA_MAX_AGE_MS`;
 - record the observed delivery cadence of each aged input and tighten `MARKET_DATA_MAX_AGE_MS` to match;
@@ -845,7 +1002,12 @@ The current tests cover:
 - options-indicator store validation: unknown tickers, unparseable trading dates, nonfinite and nonpositive values, replayed and reordered sequences, future-dated frames, staleness, prior-session values, and proxy-restart resynchronization;
 - localhost UDP delivery into the store, including malformed datagrams and clean socket shutdown;
 - entry gating on proxy readiness, gamma flip arriving after the open, and position management surviving a silent proxy;
-- cross-language decoding of golden payloads produced by the Python proxy's own serializer.
+- cross-language decoding of golden payloads produced by the Python proxy's own serializer;
+- reference-table parsing: blank rates, malformed sectors, duplicate and missing rows, regime selection, and the coverage report;
+- concentration limits: ticker and sector caps, working-entry exposure, the minimum notional floor, and an unknown account refusing to size;
+- proportional slice trimming, including exact re-summation to the parent and abandonment when a slice rounds to zero;
+- market-snapshot capture and the account-value tag names, including a regression guard that `ExcessMargin` is not honoured;
+- refusal to start on an absent or unrecognised `MARGIN_METHODOLOGY`.
 
 Unit tests do not replace an end-to-end PAPER test against the installed TWS/Gateway and IBKR API version.
 
@@ -908,10 +1070,14 @@ A new strategy should:
 
 ## Remaining work before automated PAPER trading
 
-1. Complete end-to-end PAPER testing, including disconnect and restart scenarios. `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE` exist to generate the executions this needs, in both directions.
-2. Add multi-destination UDP delivery in the proxy so the LIVE and PAPER engines can be fed simultaneously from one laptop.
-3. Add health reporting and external liveness alerts.
-4. Retire `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE` once execution is verified. Neither is ever to run on a live account.
+1. **Enable a real-time market-data subscription.** `DAILY_VWAP` is a required entry input for all three strategies and arrives only on `RT_VOLUME`, which delayed data does not carry. Until then the engine places no orders at all, and nothing below can be verified.
+2. **Fill in `data/universe-reference.csv`.** Every rate is blank, so all 30 symbols size against the 0.50 default, and the draft sectors have not been checked against a GICS source.
+3. **Set `IBKR_EXPECTED_ACCOUNT`.** It is blank, so the guard against connecting to the wrong account is inactive.
+4. Complete end-to-end PAPER testing, including disconnect and restart scenarios. `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE` exist to generate the executions this needs, in both directions.
+5. Confirm the declared margin regime against IBKR's own figures, and refuse to trade when it cannot be confirmed. Blocked on knowing which account tags actually arrive.
+6. Add multi-destination UDP delivery in the proxy so the LIVE and PAPER engines can be fed simultaneously from one laptop.
+7. Add health reporting and external liveness alerts.
+8. Retire `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE` once execution is verified. Neither is ever to run on a live account.
 
 ## Disclaimer
 

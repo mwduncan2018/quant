@@ -56,7 +56,7 @@ rates are read off IBKR's public margin calculator into
    **Receiving Component:** `EClientSocket`
 
 5. **Initiating Component:** `EWrapperRaptor.updateAccountValue(String key, String value, String currency, String accountName)`
-   **Method Invocation:** `accountEventHandler.onUpdateAccountValue(...)`, which skips any currency other than `USD` or `BASE` and switches on `NetLiquidation`, `TotalCashValue`, `SettledCash`, `BuyingPower`, `AvailableFunds`, `ExcessMargin`, `RealizedPnL`, `UnrealizedPnL`, `Cushion`
+   **Method Invocation:** `accountEventHandler.onUpdateAccountValue(...)`, which skips any currency other than `USD` or `BASE` and switches on `NetLiquidation`, `TotalCashValue`, `SettledCash`, `BuyingPower`, `AvailableFunds`, `ExcessLiquidity`, `RealizedPnL`, `UnrealizedPnL`, `Cushion`, and routes every other key to `reportUnhandled(String)`. `ExcessLiquidity` is the tag IBKR sends; the engine previously matched `ExcessMargin`, which is not one, so the field sat at zero for the life of the process
    **Receiving Component:** `Account`
 
 6. **Initiating Component:** `EWrapperRaptor.updateAccountTime(String timeStamp)`
@@ -96,7 +96,7 @@ rates are read off IBKR's public margin calculator into
 ### Margin-rate resolution (main thread, once at startup)
 
 13. **Initiating Component:** `Main.main(String[])`
-    **Method Invocation:** `UniverseReference.load(Path.of(config.getUniverseReferencePath()), MarginMethodology.parse(config.getMarginMethodology()), config.getDefaultLongMarginRate(), config.getDefaultShortMarginRate())`
+    **Method Invocation:** `UniverseReference.load(Path.of(config.getUniverseReferencePath()), config.getMarginMethodology(), config.getDefaultLongMarginRate(), config.getDefaultShortMarginRate())` — the regime is already a `MarginMethodology`, parsed and validated when `EnvPropConfig` was constructed
     **Receiving Component:** `UniverseReference`
 
 14. **Initiating Component:** `Main.main(String[])`
