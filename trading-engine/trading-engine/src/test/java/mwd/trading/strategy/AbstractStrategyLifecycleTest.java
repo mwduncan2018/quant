@@ -33,6 +33,7 @@ import mwd.trading.execution.OrderRegistry;
 import mwd.trading.execution.UncertainOrderSubmissionException;
 import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -338,28 +339,28 @@ class AbstractStrategyLifecycleTest {
         }
 
         @Override
-        protected boolean isEntryConditionMet(Stock stock) {
-            entryEvaluationCounts.merge(stock.getTicker(), 1, Integer::sum);
-            if (entryFailures.contains(stock.getTicker())) {
+        protected boolean isEntryConditionMet(MarketSnapshot market) {
+            entryEvaluationCounts.merge(market.ticker(), 1, Integer::sum);
+            if (entryFailures.contains(market.ticker())) {
                 throw new IllegalStateException("test entry failure");
             }
-            return entryTickers.contains(stock.getTicker());
+            return entryTickers.contains(market.ticker());
         }
 
-        @Override protected double calculateEntryPrice(Stock stock) { return 100.0; }
+        @Override protected double calculateEntryPrice(MarketSnapshot market) { return 100.0; }
 
         @Override
         protected List<BracketOrderExecutor.SliceIntent> calculateSliceIntents(
-                Stock stock, double entryPrice) {
+                MarketSnapshot market, double entryPrice) {
             return List.of(new BracketOrderExecutor.SliceIntent(
                     Decimal.get(1), 110.0, 90.0, 1L));
         }
 
         @Override
-        protected void evaluateTickStreamNeed(Stock stock, double entryPrice) {}
+        protected void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice) {}
 
         @Override
-        protected void manageOpenPosition(Stock stock) {
+        protected void manageOpenPosition(Stock stock, MarketSnapshot market) {
             managementCounts.merge(stock.getTicker(), 1, Integer::sum);
             if (managementFailures.contains(stock.getTicker())) {
                 throw new IllegalStateException("test management failure");

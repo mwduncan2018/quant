@@ -31,6 +31,7 @@ import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketDataInputStore;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -110,6 +111,15 @@ class OneSigmaDownsideStrategyTest {
         return blackboard.getStock(TICKER);
     }
 
+    /**
+     * The values as one decision sees them. A strategy reads a snapshot now, so a
+     * test that mutates the stock and then calls a hook must take the snapshot
+     * after the mutation - the same ordering the engine has.
+     */
+    private MarketSnapshot market() {
+        return MarketSnapshot.of(stock(), MID_MORNING.toEpochMilli());
+    }
+
     // ----------------------------------------------------------------
     // Entry
     // ----------------------------------------------------------------
@@ -119,8 +129,8 @@ class OneSigmaDownsideStrategyTest {
         OneSigmaDownsideMeanReversionStrategy built =
                 strategy(MID_MORNING, standardSession(MONDAY));
 
-        assertTrue(built.isEntryConditionMet(stock()));
-        assertEquals(ENTRY_LEVEL, built.calculateEntryPrice(stock()), 1.0e-9);
+        assertTrue(built.isEntryConditionMet(market()));
+        assertEquals(ENTRY_LEVEL, built.calculateEntryPrice(market()), 1.0e-9);
     }
 
     @Test
@@ -129,7 +139,7 @@ class OneSigmaDownsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
         stock().setLastPrice(94.0);
 
-        assertTrue(built.isEntryConditionMet(stock()));
+        assertTrue(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -138,7 +148,7 @@ class OneSigmaDownsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
         stock().setLastPrice(96.01);
 
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -149,10 +159,10 @@ class OneSigmaDownsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
 
         stock().setDailyVWAP(97.0);
-        assertTrue(built.isEntryConditionMet(stock()));
+        assertTrue(built.isEntryConditionMet(market()));
 
         stock().setDailyVWAP(96.99);
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -175,7 +185,7 @@ class OneSigmaDownsideStrategyTest {
                         standardSession(MONDAY), Clock.fixed(MID_MORNING, ZoneOffset.UTC));
         primeState();
 
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     // ----------------------------------------------------------------
@@ -185,23 +195,23 @@ class OneSigmaDownsideStrategyTest {
     @Test
     void entryIsBlockedInsideTheLastHour() {
         assertTrue(strategy(newYork(MONDAY, 14, 59), standardSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
         assertFalse(strategy(newYork(MONDAY, 15, 0), standardSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void anEarlyCloseShortensTheEntryWindow() {
         assertFalse(strategy(newYork(MONDAY, 12, 30), earlyCloseSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
         assertTrue(strategy(newYork(MONDAY, 11, 30), earlyCloseSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void anUnknownCloseBlocksEntry() {
         assertFalse(strategy(MID_MORNING, new MarketCalendarStore())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -241,7 +251,7 @@ class OneSigmaDownsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
 
         List<BracketOrderExecutor.SliceIntent> intents =
-                built.calculateSliceIntents(stock(), ENTRY_LEVEL);
+                built.calculateSliceIntents(market(), ENTRY_LEVEL);
 
         assertEquals(1, intents.size());
         assertEquals(99.0, intents.get(0).takeProfitPrice, 1.0e-9);
@@ -251,12 +261,36 @@ class OneSigmaDownsideStrategyTest {
     }
 
     @Test
+    void theTakeProfitCarriesTheReadingTheEntryTestApproved() {
+        OneSigmaDownsideMeanReversionStrategy built =
+                strategy(MID_MORNING, standardSession(MONDAY));
+
+        // The gate admits this reading because its VWAP of 99.00 clears the
+        // 97.00 floor, which is what proves reward is at least equal to risk.
+        MarketSnapshot approved = market();
+        assertTrue(built.isEntryConditionMet(approved));
+
+        // A tick lands while the entry is being built, taking VWAP under that
+        // floor. Reading the live field again here is how the order used to end
+        // up resting on a target the gate had never approved.
+        stock().setDailyVWAP(95.5);
+
+        List<BracketOrderExecutor.SliceIntent> intents =
+                built.calculateSliceIntents(approved, ENTRY_LEVEL);
+
+        assertEquals(99.0, intents.get(0).takeProfitPrice, 1.0e-9,
+                "the slice must price off the snapshot the entry test approved");
+        assertFalse(built.isEntryConditionMet(market()),
+                "the later reading would not have been admitted at all");
+    }
+
+    @Test
     void noAccountStateProducesNoSlices() {
         OneSigmaDownsideMeanReversionStrategy built =
                 strategy(MID_MORNING, standardSession(MONDAY));
         blackboard.getAccount().setNetLiquidation(0.0);
 
-        assertTrue(built.calculateSliceIntents(stock(), ENTRY_LEVEL).isEmpty());
+        assertTrue(built.calculateSliceIntents(market(), ENTRY_LEVEL).isEmpty());
     }
 
     // ----------------------------------------------------------------
@@ -273,7 +307,7 @@ class OneSigmaDownsideStrategyTest {
         BracketOrder bracket = openPosition(gateway);
 
         stock().setDailyVWAP(94.0);
-        built.manageOpenPosition(stock());
+        built.manageOpenPosition(stock(), market());
 
         assertEquals(94.0, bracket.getSlices().get(0).getTakeProfitPrice(), 1.0e-9);
         assertEquals(1, gateway.updates);
@@ -287,7 +321,7 @@ class OneSigmaDownsideStrategyTest {
         openPosition(gateway);
 
         stock().setDailyVWAP(99.04);
-        built.manageOpenPosition(stock());
+        built.manageOpenPosition(stock(), market());
 
         assertEquals(0, gateway.updates);
     }
@@ -305,7 +339,7 @@ class OneSigmaDownsideStrategyTest {
             // A fresh strategy clock each cycle would be needed to pass the
             // interval gate, so drive it directly with a widening VWAP.
             stock().setDailyVWAP(99.0 + i);
-            built.manageOpenPosition(stock());
+            built.manageOpenPosition(stock(), market());
         }
 
         assertEquals(1, gateway.updates, "the 60-second interval blocks the rest");
@@ -315,11 +349,11 @@ class OneSigmaDownsideStrategyTest {
     void closingAPositionStartsTheReentryCooldown() {
         OneSigmaDownsideMeanReversionStrategy built =
                 strategy(MID_MORNING, standardSession(MONDAY));
-        assertTrue(built.isEntryConditionMet(stock()));
+        assertTrue(built.isEntryConditionMet(market()));
 
         built.onPositionClosed(stock());
 
-        assertFalse(built.isEntryConditionMet(stock()),
+        assertFalse(built.isEntryConditionMet(market()),
                 "a ticker parked below the level would otherwise round-trip continuously");
     }
 
@@ -333,7 +367,7 @@ class OneSigmaDownsideStrategyTest {
         OneSigmaDownsideMeanReversionStrategy later =
                 strategy(newYork(MONDAY, 10, 16), standardSession(MONDAY));
 
-        assertTrue(later.isEntryConditionMet(stock()));
+        assertTrue(later.isEntryConditionMet(market()));
     }
 
     // ----------------------------------------------------------------

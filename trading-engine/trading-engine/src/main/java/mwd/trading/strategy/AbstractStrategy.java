@@ -25,6 +25,7 @@ import mwd.trading.execution.UncertainOrderSubmissionException;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.state.Blackboard;
 
@@ -158,7 +159,7 @@ public abstract class AbstractStrategy implements Runnable {
                 }
                 acknowledgeStatusChange(stock, strategyId);
                 if (automatedOrderChangesAllowed(stock)) {
-                    manageOpenPosition(stock);
+                    manageOpenPosition(stock, snapshot(stock));
                 }
             }
         }
@@ -230,14 +231,21 @@ public abstract class AbstractStrategy implements Runnable {
         if (!tradingGate.allowsNewEntries()
                 || !stock.isTradeable()
                 || !blackboard.isAccountCurrentForNewEntry()
-                || !entryInputsReady(stock)
-                || !isEntryConditionMet(stock)) {
+                || !entryInputsReady(stock)) {
             return;
         }
 
-        double entryPrice = calculateEntryPrice(stock);
-        evaluateTickStreamNeed(stock, entryPrice);
-        if (!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)) {
+        // Screening only. This view is thrown away if it survives to the lock,
+        // because by then the tape has moved and the decision has to be made
+        // again on what is true at that point.
+        MarketSnapshot screening = snapshot(stock);
+        if (!isEntryConditionMet(screening)) {
+            return;
+        }
+
+        double entryPrice = calculateEntryPrice(screening);
+        evaluateTickStreamNeed(screening, entryPrice);
+        if (!tradeDirection().acceptsEntryPrice(screening.lastPrice(), entryPrice)) {
             return;
         }
         // Everything above is advisory: it can be recomputed freely because
@@ -252,20 +260,29 @@ public abstract class AbstractStrategy implements Runnable {
 
             if (!tradingGate.allowsNewEntries()
                     || !marketDataFreshness.areAllFresh(
-                            stock.getTicker(), requiredEntryInputs())
-                    || !isEntryConditionMet(stock)) {
+                            stock.getTicker(), requiredEntryInputs())) {
                 rollbackEntryReservation(stock, reservation);
                 return;
             }
 
-            entryPrice = calculateEntryPrice(stock);
-            if (!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)) {
+            // Taken after the lock, and the only view the order is built from.
+            // The entry test, the limit price, and the exit levels all read it,
+            // so what the gate proved about this data still holds of the order
+            // that carries it.
+            MarketSnapshot market = snapshot(stock);
+            if (!isEntryConditionMet(market)) {
+                rollbackEntryReservation(stock, reservation);
+                return;
+            }
+
+            entryPrice = calculateEntryPrice(market);
+            if (!tradeDirection().acceptsEntryPrice(market.lastPrice(), entryPrice)) {
                 rollbackEntryReservation(stock, reservation);
                 return;
             }
 
             List<BracketOrderExecutor.SliceIntent> sliceIntents =
-                    calculateSliceIntents(stock, entryPrice);
+                    calculateSliceIntents(market, entryPrice);
             Decimal totalQuantity = totalQuantity(sliceIntents);
             if (totalQuantity.compareTo(Decimal.ZERO) <= 0) {
                 rollbackEntryReservation(stock, reservation);
@@ -417,6 +434,19 @@ public abstract class AbstractStrategy implements Runnable {
      * indistinguishable from a broken one, but logging every poll would bury the
      * transition that matters.
      */
+    /** One coherent read of everything a decision about this symbol needs. */
+    protected final MarketSnapshot snapshot(Stock stock) {
+        return MarketSnapshot.of(stock, clock.millis());
+    }
+
+    /**
+     * The same for a symbol this strategy watches but does not trade, so a
+     * reference reading is as coherent as the traded one.
+     */
+    protected final MarketSnapshot snapshot(String ticker) {
+        return snapshot(blackboard.getStock(ticker));
+    }
+
     private boolean entryInputsReady(Stock stock) {
         Optional<String> unready =
                 marketDataFreshness.describeUnready(stock.getTicker(), requiredEntryInputs());
@@ -527,16 +557,16 @@ public abstract class AbstractStrategy implements Runnable {
     /** The market-data inputs that must be usable before exits are repriced. */
     protected abstract Set<MarketDataInput> requiredManagementInputs();
 
-    protected abstract boolean isEntryConditionMet(Stock stock);
+    protected abstract boolean isEntryConditionMet(MarketSnapshot market);
 
-    protected abstract double calculateEntryPrice(Stock stock);
+    protected abstract double calculateEntryPrice(MarketSnapshot market);
 
     protected abstract List<BracketOrderExecutor.SliceIntent> calculateSliceIntents(
-            Stock stock, double entryPrice);
+            MarketSnapshot market, double entryPrice);
 
-    protected abstract void evaluateTickStreamNeed(Stock stock, double entryPrice);
+    protected abstract void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice);
 
-    protected abstract void manageOpenPosition(Stock stock);
+    protected abstract void manageOpenPosition(Stock stock, MarketSnapshot market);
 
     protected abstract String getStrategyName();
 

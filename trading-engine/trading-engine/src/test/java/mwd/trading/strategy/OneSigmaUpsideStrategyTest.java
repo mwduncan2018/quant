@@ -31,6 +31,7 @@ import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketDataInputStore;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -106,6 +107,15 @@ class OneSigmaUpsideStrategyTest {
         return blackboard.getStock(TICKER);
     }
 
+    /**
+     * The values as one decision sees them. A strategy reads a snapshot now, so a
+     * test that mutates the stock and then calls a hook must take the snapshot
+     * after the mutation - the same ordering the engine has.
+     */
+    private MarketSnapshot market() {
+        return MarketSnapshot.of(stock(), MID_MORNING.toEpochMilli());
+    }
+
     // ----------------------------------------------------------------
     // Entry
     // ----------------------------------------------------------------
@@ -115,8 +125,8 @@ class OneSigmaUpsideStrategyTest {
         OneSigmaUpsideMeanReversionStrategy built =
                 strategy(MID_MORNING, standardSession(MONDAY));
 
-        assertTrue(built.isEntryConditionMet(stock()));
-        assertEquals(ENTRY_LEVEL, built.calculateEntryPrice(stock()), 1.0e-9);
+        assertTrue(built.isEntryConditionMet(market()));
+        assertEquals(ENTRY_LEVEL, built.calculateEntryPrice(market()), 1.0e-9);
     }
 
     @Test
@@ -125,7 +135,7 @@ class OneSigmaUpsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
         stock().setLastPrice(106.0);
 
-        assertTrue(built.isEntryConditionMet(stock()));
+        assertTrue(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -135,7 +145,7 @@ class OneSigmaUpsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
         stock().setLastPrice(103.99);
 
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -146,10 +156,10 @@ class OneSigmaUpsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
 
         stock().setDailyVWAP(103.0);
-        assertTrue(built.isEntryConditionMet(stock()));
+        assertTrue(built.isEntryConditionMet(market()));
 
         stock().setDailyVWAP(103.01);
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -163,7 +173,7 @@ class OneSigmaUpsideStrategyTest {
         stock().setShortMarginRateVerified(false);
         stock().setLongMarginRateVerified(true);
 
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -179,23 +189,23 @@ class OneSigmaUpsideStrategyTest {
     @Test
     void entryIsBlockedInsideTheLastHour() {
         assertTrue(strategy(newYork(MONDAY, 14, 59), standardSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
         assertFalse(strategy(newYork(MONDAY, 15, 0), standardSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void anEarlyCloseShortensTheEntryWindow() {
         assertFalse(strategy(newYork(MONDAY, 12, 30), earlyCloseSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
         assertTrue(strategy(newYork(MONDAY, 11, 30), earlyCloseSession(MONDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void anUnknownCloseBlocksEntry() {
         assertFalse(strategy(MID_MORNING, new MarketCalendarStore())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -226,7 +236,7 @@ class OneSigmaUpsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
 
         List<BracketOrderExecutor.SliceIntent> intents =
-                built.calculateSliceIntents(stock(), ENTRY_LEVEL);
+                built.calculateSliceIntents(market(), ENTRY_LEVEL);
 
         assertEquals(1, intents.size());
         assertEquals(101.0, intents.get(0).takeProfitPrice, 1.0e-9);
@@ -242,7 +252,7 @@ class OneSigmaUpsideStrategyTest {
                 strategy(MID_MORNING, standardSession(MONDAY));
         blackboard.getAccount().setNetLiquidation(0.0);
 
-        assertTrue(built.calculateSliceIntents(stock(), ENTRY_LEVEL).isEmpty());
+        assertTrue(built.calculateSliceIntents(market(), ENTRY_LEVEL).isEmpty());
     }
 
     // ----------------------------------------------------------------
@@ -259,7 +269,7 @@ class OneSigmaUpsideStrategyTest {
         BracketOrder bracket = openShortPosition();
 
         stock().setDailyVWAP(106.0);
-        built.manageOpenPosition(stock());
+        built.manageOpenPosition(stock(), market());
 
         assertEquals(106.0, bracket.getSlices().get(0).getTakeProfitPrice(), 1.0e-9);
         assertEquals(1, gateway.updates);
@@ -273,7 +283,7 @@ class OneSigmaUpsideStrategyTest {
         openShortPosition();
 
         stock().setDailyVWAP(101.04);
-        built.manageOpenPosition(stock());
+        built.manageOpenPosition(stock(), market());
 
         assertEquals(0, gateway.updates);
     }
@@ -287,7 +297,7 @@ class OneSigmaUpsideStrategyTest {
 
         for (int i = 1; i <= 20; i++) {
             stock().setDailyVWAP(101.0 + i);
-            built.manageOpenPosition(stock());
+            built.manageOpenPosition(stock(), market());
         }
 
         assertEquals(1, gateway.updates, "the 60-second interval blocks the rest");
@@ -297,11 +307,11 @@ class OneSigmaUpsideStrategyTest {
     void closingAPositionStartsTheReentryCooldown() {
         OneSigmaUpsideMeanReversionStrategy built =
                 strategy(MID_MORNING, standardSession(MONDAY));
-        assertTrue(built.isEntryConditionMet(stock()));
+        assertTrue(built.isEntryConditionMet(market()));
 
         built.onPositionClosed(stock());
 
-        assertFalse(built.isEntryConditionMet(stock()));
+        assertFalse(built.isEntryConditionMet(market()));
     }
 
     @Test
@@ -311,7 +321,7 @@ class OneSigmaUpsideStrategyTest {
         OneSigmaUpsideMeanReversionStrategy later =
                 strategy(newYork(MONDAY, 10, 16), standardSession(MONDAY));
 
-        assertTrue(later.isEntryConditionMet(stock()));
+        assertTrue(later.isEntryConditionMet(market()));
     }
 
     // ----------------------------------------------------------------

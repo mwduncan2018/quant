@@ -26,6 +26,7 @@ import mwd.trading.execution.BracketOrderGateway;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 import mwd.trading.state.Blackboard;
@@ -178,10 +179,10 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     @Override
-    protected boolean isEntryConditionMet(Stock stock) {
+    protected boolean isEntryConditionMet(MarketSnapshot market) {
         // Long sizing reads the long rate, so the long what-if is what must
         // have been priced. The short flag says nothing about it.
-        if (!stock.isLongMarginRateVerified()) {
+        if (!market.longMarginRateVerified()) {
             return false;
         }
 
@@ -195,67 +196,67 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             return false;
         }
 
-        Instant lastExit = lastExitByTicker.get(stock.getTicker());
+        Instant lastExit = lastExitByTicker.get(market.ticker());
         if (lastExit != null && now.isBefore(lastExit.plus(REENTRY_COOLDOWN))) {
             return false;
         }
 
         OptionalDouble impliedMove = optionsIndicatorStore.impliedMoveForNewEntry(
-                stock.getTicker(), tradingDate, newYorkClock.millis());
+                market.ticker(), tradingDate, newYorkClock.millis());
         if (impliedMove.isEmpty()) {
             return false;
         }
         double move = impliedMove.getAsDouble();
-        double previousClose = stock.getPreviousClose();
+        double previousClose = market.previousClose();
 
         // Price must already be at or below the entry level; this strategy does
         // not rest an order and wait for the market to come to it.
         double entryLevel = previousClose - (move * ENTRY_MOVE_MULTIPLE);
-        if (stock.getLastPrice() > entryLevel) {
+        if (market.lastPrice() > entryLevel) {
             return false;
         }
 
         // The take-profit target must leave reward at least equal to risk.
         double minimumVwap = previousClose - (move * MINIMUM_VWAP_MOVE_MULTIPLE);
-        return stock.getDailyVWAP() >= minimumVwap;
+        return market.dailyVWAP() >= minimumVwap;
     }
 
     @Override
-    protected double calculateEntryPrice(Stock stock) {
+    protected double calculateEntryPrice(MarketSnapshot market) {
         OptionalDouble impliedMove =
-                optionsIndicatorStore.lastKnownImpliedMove(stock.getTicker());
+                optionsIndicatorStore.lastKnownImpliedMove(market.ticker());
         if (impliedMove.isEmpty()) {
             // NaN fails TradeDirection.acceptsEntryPrice, rolling back cleanly.
             return Double.NaN;
         }
-        return stock.getPreviousClose() - (impliedMove.getAsDouble() * ENTRY_MOVE_MULTIPLE);
+        return market.previousClose() - (impliedMove.getAsDouble() * ENTRY_MOVE_MULTIPLE);
     }
 
     @Override
     protected List<BracketOrderExecutor.SliceIntent> calculateSliceIntents(
-            Stock stock, double entryPrice) {
+            MarketSnapshot market, double entryPrice) {
         List<BracketOrderExecutor.SliceIntent> sliceIntents = new ArrayList<>();
         OptionalDouble impliedMove =
-                optionsIndicatorStore.lastKnownImpliedMove(stock.getTicker());
+                optionsIndicatorStore.lastKnownImpliedMove(market.ticker());
         if (impliedMove.isEmpty()) {
             return sliceIntents;
         }
         double move = impliedMove.getAsDouble();
 
-        double stopLossPrice = stock.getPreviousClose() - (move * STOP_MOVE_MULTIPLE);
+        double stopLossPrice = market.previousClose() - (move * STOP_MOVE_MULTIPLE);
         long timeExitValue = calculateTimeExit();
         if (timeExitValue <= 0L) {
             return sliceIntents;
         }
 
-        Decimal totalQuantity = calculateTotalQuantity(stock, entryPrice, stopLossPrice);
+        Decimal totalQuantity = calculateTotalQuantity(market, entryPrice, stopLossPrice);
         if (totalQuantity.compareTo(Decimal.ZERO) <= 0) {
             return sliceIntents;
         }
 
         // One slice: a single take-profit target means there is nothing to split.
         sliceIntents.add(new BracketOrderExecutor.SliceIntent(
-                totalQuantity, stock.getDailyVWAP(), stopLossPrice, timeExitValue));
+                totalQuantity, market.dailyVWAP(), stopLossPrice, timeExitValue));
         return sliceIntents;
     }
 
@@ -277,7 +278,8 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
                 .orElse(0L);
     }
 
-    private Decimal calculateTotalQuantity(Stock stock, double entryPrice, double stopLossPrice) {
+    private Decimal calculateTotalQuantity(
+            MarketSnapshot market, double entryPrice, double stopLossPrice) {
         double riskPerShare = entryPrice - stopLossPrice;
         if (riskPerShare <= 0) {
             return Decimal.ZERO;
@@ -288,7 +290,7 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         double availableFunds = account.getAvailableFunds();
         if (!(netLiquidation > 0.0) || !(availableFunds > 0.0)) {
             logger.warn("[{}] No usable account state yet (net liquidation {}, available funds {}); "
-                    + "sizing is impossible", stock.getTicker(), netLiquidation, availableFunds);
+                    + "sizing is impossible", market.ticker(), netLiquidation, availableFunds);
             return Decimal.ZERO;
         }
 
@@ -306,9 +308,9 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         }
         Decimal idealQuantity = Decimal.get(idealShareCount);
 
-        double marginRequirement = stock.calculateMarginRequirement("BUY", idealQuantity, entryPrice);
+        double marginRequirement = market.marginRequirement("BUY", idealQuantity, entryPrice);
         if (marginRequirement > availableFunds) {
-            double marginRate = stock.getLongMarginRate();
+            double marginRate = market.longMarginRate();
             if (marginRate <= 0.0) {
                 return Decimal.ZERO;
             }
@@ -319,14 +321,14 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     @Override
-    protected void evaluateTickStreamNeed(Stock stock, double entryPrice) {
+    protected void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice) {
         // No tick-by-tick stream. Entries are taken at the prevailing price
         // rather than worked, and the streams are a limited account resource
         // the two-sigma strategy has a better claim on.
     }
 
     @Override
-    protected void manageOpenPosition(Stock stock) {
+    protected void manageOpenPosition(Stock stock, MarketSnapshot market) {
         BracketOrder bracketOrder = stock.getActiveBracket();
         if (bracketOrder == null || bracketOrder.getSlices().isEmpty()) {
             return;
@@ -336,8 +338,8 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             return;
         }
 
-        String ticker = stock.getTicker();
-        double vwap = stock.getDailyVWAP();
+        String ticker = market.ticker();
+        double vwap = market.dailyVWAP();
         if (!(vwap > 0.0)) {
             return;
         }
