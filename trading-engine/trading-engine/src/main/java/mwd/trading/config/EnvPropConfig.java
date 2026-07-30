@@ -24,6 +24,14 @@ public class EnvPropConfig implements Config {
 	private int optionsProxyUdpPort = 5005;
 	private long optionsProxyFrameMaxAgeMs = 5000;
 	private long marketDataMaxAgeMs = 30000;
+	private String marginMethodology = "REG_T";
+	private String universeReferencePath = "data/universe-reference.csv";
+	private double defaultLongMarginRate = 0.50;
+	private double defaultShortMarginRate = 0.50;
+	private long universeReferenceMaxAgeDays = 30;
+	private double maxTickerExposurePercent = 30.0;
+	private double maxSectorExposurePercent = 50.0;
+	private double minPositionNotional = 2000.0;
 	private boolean earningsEnabled = true;
 	private String earningsEndpointUrl = "http://127.0.0.1:8000/earnings";
 	private long earningsConnectTimeoutMs = 3000;
@@ -120,6 +128,23 @@ public class EnvPropConfig implements Config {
 				value("OPTIONS_PROXY_FRAME_MAX_AGE_MS", properties, "5000"));
 		this.marketDataMaxAgeMs = Long.parseLong(
 				value("MARKET_DATA_MAX_AGE_MS", properties, "30000"));
+
+		this.marginMethodology = value("MARGIN_METHODOLOGY", properties, "REG_T");
+		this.universeReferencePath = value(
+				"UNIVERSE_REFERENCE_PATH", properties, "data/universe-reference.csv");
+		this.defaultLongMarginRate = Double.parseDouble(
+				value("DEFAULT_LONG_MARGIN_RATE", properties, "0.50"));
+		this.defaultShortMarginRate = Double.parseDouble(
+				value("DEFAULT_SHORT_MARGIN_RATE", properties, "0.50"));
+		this.universeReferenceMaxAgeDays = Long.parseLong(
+				value("UNIVERSE_REFERENCE_MAX_AGE_DAYS", properties, "30"));
+
+		this.maxTickerExposurePercent = Double.parseDouble(
+				value("MAX_TICKER_EXPOSURE_PCT", properties, "30"));
+		this.maxSectorExposurePercent = Double.parseDouble(
+				value("MAX_SECTOR_EXPOSURE_PCT", properties, "50"));
+		this.minPositionNotional = Double.parseDouble(
+				value("MIN_POSITION_NOTIONAL", properties, "2000"));
 
 		// 7. Initialize the options-proxy earnings endpoint
 		this.earningsEnabled = Boolean.parseBoolean(
@@ -274,6 +299,46 @@ public class EnvPropConfig implements Config {
 	@Override
 	public long getOptionsProxyFrameMaxAgeMs() {
 		return this.optionsProxyFrameMaxAgeMs;
+	}
+
+	@Override
+	public String getMarginMethodology() {
+		return this.marginMethodology;
+	}
+
+	@Override
+	public String getUniverseReferencePath() {
+		return this.universeReferencePath;
+	}
+
+	@Override
+	public double getDefaultLongMarginRate() {
+		return this.defaultLongMarginRate;
+	}
+
+	@Override
+	public double getDefaultShortMarginRate() {
+		return this.defaultShortMarginRate;
+	}
+
+	@Override
+	public double getMaxTickerExposurePercent() {
+		return this.maxTickerExposurePercent;
+	}
+
+	@Override
+	public double getMaxSectorExposurePercent() {
+		return this.maxSectorExposurePercent;
+	}
+
+	@Override
+	public double getMinPositionNotional() {
+		return this.minPositionNotional;
+	}
+
+	@Override
+	public long getUniverseReferenceMaxAgeDays() {
+		return this.universeReferenceMaxAgeDays;
 	}
 
 	@Override

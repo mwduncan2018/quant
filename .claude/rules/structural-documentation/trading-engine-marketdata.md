@@ -157,7 +157,7 @@ No `Blackboard` reference. The store holds metadata only; the values themselves 
 
 ## `MarketSnapshot`
 
-`public record MarketSnapshot(String ticker, long takenAtUnixMs, double lastPrice, double previousClose, double dailyVWAP, Bar lastMinuteBar, Decimal lastMinuteVolume, Decimal averageLast15MinuteVolume, double longMarginRate, boolean longMarginRateVerified, double shortMarginRate, boolean shortMarginRateVerified)`
+`public record MarketSnapshot(String ticker, long takenAtUnixMs, double lastPrice, double previousClose, double dailyVWAP, Bar lastMinuteBar, Decimal lastMinuteVolume, Decimal averageLast15MinuteVolume)`
 
 ### 1. Class/Interface Responsibilities
 
@@ -178,16 +178,17 @@ Canonical record constructor parameters, in declaration order:
 | `lastPrice`, `previousClose`, `dailyVWAP` | `double` |
 | `lastMinuteBar` | `com.ib.client.Bar` |
 | `lastMinuteVolume`, `averageLast15MinuteVolume` | `com.ib.client.Decimal` |
-| `longMarginRate`, `shortMarginRate` | `double` |
-| `longMarginRateVerified`, `shortMarginRateVerified` | `boolean` |
+
+Margin rates are deliberately absent. They are configuration rather than market
+data, so they cannot vary within a decision and freezing them alongside the tape
+would carry weight for nothing; sizing reads them from `UniverseReference`.
 
 ### 3. Method Signatures
 
 ```java
-public MarketSnapshot(String ticker, long takenAtUnixMs, double lastPrice, double previousClose, double dailyVWAP, Bar lastMinuteBar, Decimal lastMinuteVolume, Decimal averageLast15MinuteVolume, double longMarginRate, boolean longMarginRateVerified, double shortMarginRate, boolean shortMarginRateVerified)
+public MarketSnapshot(String ticker, long takenAtUnixMs, double lastPrice, double previousClose, double dailyVWAP, Bar lastMinuteBar, Decimal lastMinuteVolume, Decimal averageLast15MinuteVolume)
 
 public static MarketSnapshot of(Stock stock, long takenAtUnixMs)
-public double marginRequirement(String action, Decimal quantity, double price)
 ```
 
 Record accessors are generated for every component.
@@ -200,8 +201,7 @@ None. The record is immutable once constructed.
 
 | Method | Interaction |
 | --- | --- |
-| `of(Stock, long)` | Reads `getTicker`, `getLastPrice`, `getPreviousClose`, `getDailyVWAP`, `getLastMinuteBar`, `getLastMinuteVolume`, `getAverageLast15MinuteVolume`, `getLongMarginRate`, `isLongMarginRateVerified`, `getShortMarginRate`, `isShortMarginRateVerified` — one read each, no writes |
-| `marginRequirement(String, Decimal, double)` | Reads the captured `longMarginRate` for `"BUY"` (case-insensitive), otherwise `shortMarginRate`; mirrors `Stock.calculateMarginRequirement` against frozen values |
+| `of(Stock, long)` | Reads `getTicker`, `getLastPrice`, `getPreviousClose`, `getDailyVWAP`, `getLastMinuteBar`, `getLastMinuteVolume`, `getAverageLast15MinuteVolume` — one read each, no writes |
 
 The reader thread can write between two of the reads in `of`, so the result is not
 an instant of the tape. It is one bounded window that every consumer of that

@@ -33,6 +33,9 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -47,6 +50,12 @@ import static mwd.trading.support.ProxyReferenceFixtures.standardSession;
  */
 class TwoSigmaDownsideOptionsProxyGatingTest {
     private static final String TICKER = "AAPL";
+
+    /** Margin is configuration now; this is the rate these assertions assume. */
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            java.util.List.of("AAPL,INFORMATION_TECHNOLOGY,1.0,1.0,1.0,1.0"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     private static final LocalDate TRADING_DATE = LocalDate.of(2026, 7, 27);
     private static final LocalDate PREVIOUS_TRADING_DATE = LocalDate.of(2026, 7, 24);
     // 10:00 in New York on the trading date, comfortably inside the entry window.
@@ -76,6 +85,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 config,
                 tradingGate,
                 marketDataReadyAt(NOW),
+                UNIVERSE_REFERENCE, permissiveLimits(),
                 store,
                 // Far-off earnings and a standard session, so each assertion
                 // isolates the options-proxy condition under test.
@@ -88,7 +98,6 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
     /** Every non-proxy entry lock is satisfied by this state. */
     private void primeCapitulationState() {
         Stock stock = blackboard.getStock(TICKER);
-        stock.setLongMarginRateVerified(true);
         stock.setPreviousClose(100.0);
         stock.setLastPrice(96.0);
         stock.setDailyVWAP(101.0);
@@ -112,6 +121,14 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 .setStaticDailyImpliedMoveValid(true)
                 .setSpyGammaFlip(GAMMA_FLIP)
                 .setSpyGammaFlipValid(true);
+    }
+
+    /**
+     * Permissive caps. These tests are about strategy logic, not concentration;
+     * the limits have their own tests.
+     */
+    private ConcentrationLimits permissiveLimits() {
+        return new ConcentrationLimits(blackboard, UNIVERSE_REFERENCE, 100.0, 100.0, 0.0);
     }
 
     private Stock stock() {
@@ -268,6 +285,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 config,
                 tradingGate,
                 marketDataReadyAt(instant),
+                UNIVERSE_REFERENCE, permissiveLimits(),
                 store,
                 // Far-off earnings and a standard session, so each assertion
                 // isolates the options-proxy condition under test.

@@ -16,6 +16,8 @@ Traces a new entry from the strategy poll loop through bracket construction and
 | `mwd.trading.strategy.AbstractStrategy` | `Runnable` poll loop that gates, sizes, and submits an entry, then interprets the resulting `BracketOrder.Status`. |
 | `mwd.trading.strategy.EntryAdmission` | Takes and unwinds the two entry claims through `PositionLedger`, and hands back an `AutoCloseable` `Reservation`. |
 | `mwd.trading.marketdata.MarketSnapshot` | The frozen market-data view each entry decision is built from; one for screening, one taken after the lock is held. |
+| `mwd.trading.risk.UniverseReference` | Per-ticker margin rate the sizing multiplies against, read from a file rather than measured. |
+| `mwd.trading.risk.ConcentrationLimits` | Per-ticker and per-sector caps that can only reduce the quantity a strategy asked for. |
 | `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Concrete strategy supplying `isEntryConditionMet`, `calculateEntryPrice`, `calculateSliceIntents`, `evaluateTickStreamNeed`, `manageOpenPosition`, `getStrategyName`, `getTradeDirection`. |
 | `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Concrete strategy with the same override set, `TradeDirection.LONG`. |
 | `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Concrete strategy with the same override set, `TradeDirection.SHORT`. |
@@ -80,8 +82,8 @@ Traces a new entry from the strategy poll loop through bracket construction and
    **Receiving Component:** `TradingGate`, `MarketDataInputStore`, the concrete strategy
 
 9. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** `calculateSliceIntents(MarketSnapshot, double)` on that same view, then the private `totalQuantity(List<SliceIntent>)`
-   **Receiving Component:** the concrete strategy
+   **Method Invocation:** `calculateSliceIntents(MarketSnapshot, double)` on that same view, then the private `totalQuantity(List<SliceIntent>)`, then `concentrationLimits.allowedQuantity(ticker, entryPrice, totalQuantity)`; a smaller allowance is applied by `trimToTotal(...)`, which scales every slice and gives the rounding loss to the first so the parts still sum exactly to the parent. A slice that would round to zero, or a total below `MIN_POSITION_NOTIONAL`, rolls the reservation back instead
+   **Receiving Component:** the concrete strategy, `ConcentrationLimits`
 
 10. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
     **Method Invocation:** `pendingEntries.put(ticker, new PendingEntry(clock.millis()))` and `blackboard.recordEntrySubmitted(clock.millis())`
@@ -144,7 +146,7 @@ Traces a new entry from the strategy poll loop through bracket construction and
     **Receiving Component:** `OrderLifecycleHandler.onOpenOrder(int, Contract, Order, OrderState)`
 
 24. **Initiating Component:** `OrderLifecycleHandler.onOpenOrder(...)`
-    **Method Invocation:** `order.whatIf()` → `processWhatIf(Contract, Order, OrderState)` and return; otherwise `reconciliationManager.onOpenOrder(int, Contract, Order, OrderState)`
+    **Method Invocation:** `reconciliationManager.onOpenOrder(int, Contract, Order, OrderState)`
     **Receiving Component:** `ReconciliationManager`
 
 25. **Initiating Component:** `OrderLifecycleHandler.resolveBracket(int, long, String)`

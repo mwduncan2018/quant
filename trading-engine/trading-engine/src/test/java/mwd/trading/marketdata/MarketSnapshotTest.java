@@ -25,9 +25,6 @@ class MarketSnapshotTest {
         stock.setDailyVWAP(99.0);
         stock.setLastMinuteVolume(Decimal.get(1_000));
         stock.setAverageLast15MinuteVolume(Decimal.get(800));
-        stock.setLongMarginRate(0.25);
-        stock.setLongMarginRateVerified(true);
-        stock.setShortMarginRate(0.30);
         return stock;
     }
 
@@ -42,10 +39,6 @@ class MarketSnapshotTest {
         assertEquals(99.0, market.dailyVWAP(), 1.0e-9);
         assertEquals(Decimal.get(1_000), market.lastMinuteVolume());
         assertEquals(Decimal.get(800), market.averageLast15MinuteVolume());
-        assertEquals(0.25, market.longMarginRate(), 1.0e-9);
-        assertTrue(market.longMarginRateVerified());
-        assertEquals(0.30, market.shortMarginRate(), 1.0e-9);
-        assertFalse(market.shortMarginRateVerified());
     }
 
     @Test
@@ -75,22 +68,9 @@ class MarketSnapshotTest {
     }
 
     @Test
-    void marginSizesOffTheCapturedRateForTheDirectionBeingTraded() {
-        Stock stock = primed();
-        MarketSnapshot market = MarketSnapshot.of(stock, TAKEN_AT);
-
-        // The next what-if cycle reprices the symbol; a quantity already being
-        // sized must not switch rates halfway through.
-        stock.setLongMarginRate(0.90);
-
-        assertEquals(2_400.0, market.marginRequirement("BUY", Decimal.get(100), 96.0), 1.0e-9);
-        assertEquals(2_880.0, market.marginRequirement("SELL", Decimal.get(100), 96.0), 1.0e-9);
-    }
-
-    @Test
     void aSnapshotWithoutATickerIsRefused() {
         assertThrows(NullPointerException.class, () -> new MarketSnapshot(
-                null, TAKEN_AT, 0, 0, 0, null, null, null, 1.0, false, 1.0, false));
+                null, TAKEN_AT, 0, 0, 0, null, null, null));
         assertThrows(NullPointerException.class, () -> MarketSnapshot.of(null, TAKEN_AT));
     }
 }

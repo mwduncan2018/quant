@@ -34,6 +34,9 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -47,6 +50,12 @@ import mwd.trading.support.TestConfig;
  */
 class OneSigmaDownsideStrategyTest {
     private static final String TICKER = "AAPL";
+
+    /** Margin is configuration now; this is the rate these assertions assume. */
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            java.util.List.of("AAPL,INFORMATION_TECHNOLOGY,0.25,0.25,0.25,0.25"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     private static final LocalDate MONDAY = LocalDate.of(2026, 7, 27);
     private static final Instant MID_MORNING = newYork(MONDAY, 10, 0);
     private static final double PREVIOUS_CLOSE = 100.0;
@@ -88,6 +97,7 @@ class OneSigmaDownsideStrategyTest {
                         config,
                         tradingGate,
                         inputStore,
+                        UNIVERSE_REFERENCE, permissiveLimits(),
                         optionsStore,
                         calendar,
                         Clock.fixed(now, ZoneOffset.UTC));
@@ -100,11 +110,17 @@ class OneSigmaDownsideStrategyTest {
         blackboard.getAccount().setAvailableFunds(50_000.0);
 
         Stock stock = blackboard.getStock(TICKER);
-        stock.setLongMarginRateVerified(true);
-        stock.setLongMarginRate(0.25);
         stock.setPreviousClose(PREVIOUS_CLOSE);
         stock.setLastPrice(ENTRY_LEVEL);
         stock.setDailyVWAP(99.0);
+    }
+
+    /**
+     * Permissive caps. These tests are about strategy logic, not concentration;
+     * the limits have their own tests.
+     */
+    private ConcentrationLimits permissiveLimits() {
+        return new ConcentrationLimits(blackboard, UNIVERSE_REFERENCE, 100.0, 100.0, 0.0);
     }
 
     private Stock stock() {
@@ -181,7 +197,7 @@ class OneSigmaDownsideStrategyTest {
         OneSigmaDownsideMeanReversionStrategy built =
                 new OneSigmaDownsideMeanReversionStrategy(
                         blackboard, new RecordingGateway(), new NoopTickStreams(), config, gate,
-                        inputStore, new OptionsIndicatorStore(Set.of(TICKER), 5000L),
+                        inputStore, UNIVERSE_REFERENCE, permissiveLimits(), new OptionsIndicatorStore(Set.of(TICKER), 5000L),
                         standardSession(MONDAY), Clock.fixed(MID_MORNING, ZoneOffset.UTC));
         primeState();
 
@@ -398,7 +414,7 @@ class OneSigmaDownsideStrategyTest {
         OneSigmaDownsideMeanReversionStrategy built =
                 new OneSigmaDownsideMeanReversionStrategy(
                         blackboard, gateway, new NoopTickStreams(), config, tradingGate,
-                        inputStore, optionsStore, calendar, Clock.fixed(now, ZoneOffset.UTC));
+                        inputStore, UNIVERSE_REFERENCE, permissiveLimits(), optionsStore, calendar, Clock.fixed(now, ZoneOffset.UTC));
         primeState();
         return built;
     }

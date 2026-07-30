@@ -22,7 +22,6 @@ All threads are created in `Main.main` unless stated otherwise.
 | `TwoSigmaDownsideMeanReversionStrategy-Thread` | `Main.strategyThread` | yes | `AbstractStrategy.run()` |
 | `OneSigmaDownsideMeanReversionStrategy-Thread` | `Main.strategyThread` | yes | `AbstractStrategy.run()` |
 | `OneSigmaUpsideMeanReversionStrategy-Thread` | `Main.strategyThread` | yes | `AbstractStrategy.run()` |
-| `Margin-Pacer-Thread` | `Main.main` | yes | `MarginPacer.run()` |
 | `Earnings-Refresher-Thread` | `Main.main` (only when `config.isEarningsEnabled()`) | yes | `EarningsRefresher.run()` |
 | `Market-Calendar-Refresher-Thread` | `Main.main` | yes | `MarketCalendarRefresher.run()` |
 | `Options-Proxy-UDP-Receiver` | `OptionsIndicatorFrameReceiver.start()` | yes | `OptionsIndicatorFrameReceiver.receiveLoop()` |
@@ -44,9 +43,11 @@ Executing on a strategy poll thread:
 
 | Class | Methods |
 |---|---|
-| `AbstractStrategy` | `run`, `runOneCycle`, `processSymbolSafely`, `executeLifecycle`, `acknowledgeStatusChange`, `evaluateNewEntry`, `handlePendingEntry`, `handleFlatWithLocalOwnership`, `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `snapshot`, `updateExits`, `entryInputsReady`, `automatedOrderChangesAllowed`, `acknowledgementTimedOut`, `escalate`, `strategyId`, `tradeDirection` |
+| `AbstractStrategy` | `run`, `runOneCycle`, `processSymbolSafely`, `executeLifecycle`, `acknowledgeStatusChange`, `evaluateNewEntry`, `handlePendingEntry`, `handleFlatWithLocalOwnership`, `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `snapshot`, `trimToTotal`, `updateExits`, `entryInputsReady`, `automatedOrderChangesAllowed`, `acknowledgementTimedOut`, `escalate`, `strategyId`, `tradeDirection` |
 | `EntryAdmission` | `tryAdmit`, and `Reservation.keep` / `release` / `close` |
 | `MarketSnapshot` | `of`, taken once per screening pass and once per admitted entry, plus once per management cycle |
+| `UniverseReference` | `marginRate`, `sector` — immutable after construction, so no synchronization is involved |
+| `ConcentrationLimits` | `allowedQuantity`, `currentExposure` — iterates `Blackboard.forEachStock` on the strategy thread while the reader thread may be writing the very fields being summed |
 | `TwoSigmaDownsideMeanReversionStrategy`, `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` | `isEntryConditionMet`, `calculateEntryPrice`, `calculateSliceIntents`, `evaluateTickStreamNeed`, `manageOpenPosition`, `onPositionClosed`, `requiredEntryInputs`, `requiredManagementInputs`, `getStrategyName`, `getTradeDirection` |
 | `BracketOrderExecutor` (via `BracketOrderGateway`) | `placeTripleThreat`, `updateTripleThreatExits`, `persistIntent`, `validateEntryIntent`, `configuredAccount`, `halt` |
 | `JsonTradingStateStore` | `recordIntent` (reached from `BracketOrderExecutor.persistIntent`) |
@@ -98,7 +99,7 @@ Every `EWrapperRaptor` override runs on the reader thread. `EWrapperRaptor` perf
 
 Reached transitively on the same reader thread:
 
-- `OrderLifecycleHandler` private members: `processWhatIf`, `validateExitSlice`, `resolveBracket`, `markPositionOpen`, `completeConfirmedFlat`, `persist`, `halt`.
+- `OrderLifecycleHandler` private members: `validateExitSlice`, `resolveBracket`, `markPositionOpen`, `completeConfirmedFlat`, `persist`, `halt`.
 - `ReconciliationManager.onPosition`, `onLivePortfolioPosition`, `onPositionEnd`, `onOpenOrder`, `onOpenOrderEnd`, `onCompletedOrder`, `onCompletedOrdersEnd`, `onExecution`, `onExecutionEnd`, `onOrderStatus`, plus `completeIfReady` when an epoch completes.
 - `BrokerState.recordPosition`, `recordOpenOrder`, `recordCompletedOrder`, `recordOrderStatus`, `recordExecution`, `snapshot`, `replaceWith`, `clear`.
 - `JsonTradingStateStore.recordBrokerUpdate` → `recordIntent` → `persist` (via `OrderLifecycleHandler.persist`).
@@ -115,10 +116,6 @@ Single-threaded `ScheduledExecutorService`. Runs `IbkrSessionManager.connectNow`
 
 Single-threaded `ScheduledExecutorService`. Runs only the scheduled lambda `() -> failEpoch(epoch.number, "Timed out waiting for the complete IBKR broker snapshot")` from `ReconciliationManager.begin`.
 
-### 1.6 `Margin-Pacer-Thread`
-
-`MarginPacer.run` and `MarginPacer.requestWhatIf`. Calls `blackboard.forEachStock`, `blackboard.getNextOrderId`, and `client.placeOrder` directly.
-
 ### 1.7 `Earnings-Refresher-Thread`
 
 `EarningsRefresher.run` → `refreshOnce` → `EarningsClient.fetch` → `ProxyJsonFetcher.fetchObject` → `EarningsStore.accept` → `acceptedListener` → `Main.mirrorEarningsForMonitor` → `Blackboard.getStock(...).setNextEarningsDate`.
@@ -133,11 +130,11 @@ Single-threaded `ScheduledExecutorService`. Runs only the scheduled lambda `() -
 
 ### 1.10 `main` thread
 
-Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerState`, `JsonTradingStateStore`, `ReconciliationManager`, the callback handlers, `EWrapperRaptor`, `IbkrSessionManager`, `MarketDataSubscriptionManager`, `TickByTickManager`, `OptionsIndicatorStore`, `OptionsIndicatorFrameReceiver`, `EarningsStore`, `MarketCalendarStore`, `MarginPacer`, `BracketOrderExecutor`, and the three strategies. Calls `stateStore.recoveredFromBackup()`, `stateStore.activeTrades()`, `tradingGate.requireManualIntervention`, `wrapper.attachLifecycle`, `sessionManager.attachSubscriptionManager`, `optionsIndicatorFrameReceiver.start()`, `Thread::start` on every thread listed above, `sessionManager.start()`, `tickByTickManager.getActiveStreamCount()`, then blocks on `new CountDownLatch(1).await()`.
+Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerState`, `JsonTradingStateStore`, `ReconciliationManager`, the callback handlers, `EWrapperRaptor`, `IbkrSessionManager`, `MarketDataSubscriptionManager`, `TickByTickManager`, `OptionsIndicatorStore`, `OptionsIndicatorFrameReceiver`, `EarningsStore`, `MarketCalendarStore`, `UniverseReference`, `ConcentrationLimits`, `BracketOrderExecutor`, and the three strategies. Calls `stateStore.recoveredFromBackup()`, `stateStore.activeTrades()`, `tradingGate.requireManualIntervention`, `wrapper.attachLifecycle`, `sessionManager.attachSubscriptionManager`, `optionsIndicatorFrameReceiver.start()`, `Thread::start` on every thread listed above, `sessionManager.start()`, `tickByTickManager.getActiveStreamCount()`, then blocks on `new CountDownLatch(1).await()`.
 
 ### 1.11 `Trading-Engine-Shutdown` hook thread
 
-`strategyThreads.forEach(Thread::interrupt)`, `marginPacerThread.interrupt()`, `earningsRefresherForShutdown.interrupt()`, `marketCalendarForShutdown.interrupt()`, `receiverForShutdown.stop()`, `sessionManager.close()`, `reconciliationManager.close()`, `LogManager.shutdown()`.
+`strategyThreads.forEach(Thread::interrupt)`, `earningsRefresherForShutdown.interrupt()`, `marketCalendarForShutdown.interrupt()`, `receiverForShutdown.stop()`, `sessionManager.close()`, `reconciliationManager.close()`, `LogManager.shutdown()`.
 
 ### 1.12 Swing Event Dispatch Thread and monitor threads
 
@@ -156,7 +153,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `Options-Proxy-UDP-Receiver` | `OptionsIndicatorStore` (`ConcurrentMap` + `AtomicReference`) | strategy poll threads |
 | `Earnings-Refresher-Thread` | `EarningsStore.accepted` `AtomicReference` | strategy poll threads |
 | `Market-Calendar-Refresher-Thread` | `MarketCalendarStore.session` `AtomicReference` | strategy poll threads |
-| any | `TradingGate.state` `AtomicReference` | strategy poll threads, `MarginPacer` |
+| any | `TradingGate.state` `AtomicReference` | strategy poll threads |
 | monitor refresh thread | `SwingUtilities.invokeLater` | Swing EDT |
 | `main` | `SwingUtilities.invokeLater` | Swing EDT |
 
@@ -275,6 +272,7 @@ Compare-and-set / read-modify-write call sites:
 | Per-ticker ownership map plus `config.getMaxActivePositions()` cap, under the `Blackboard` monitor | `Blackboard.tryReservePosition` |
 | Per-ticker lifecycle state derived rather than stored, so the reader and strategy threads cannot disagree about it | `Stock.positionStateOf(boolean, BracketOrder)` |
 | Per-symbol market data frozen for the length of one decision | `MarketSnapshot.of(Stock, long)` |
+| Per-ticker and per-sector exposure caps, shared across strategies so one sector total is seen by all of them | `ConcentrationLimits.allowedQuantity(String, double, Decimal)` |
 | Edge-triggering for work that must happen once per broker status | `AbstractStrategy.acknowledgedStatus` |
 | Single application-wide mode authority; `MANUAL_INTERVENTION` is sticky except for `STOPPING` | `TradingGate.transitionTo` |
 | All connect/reconnect/subscription work confined to one thread | `IbkrSessionManager.lifecycleExecutor` (`newSingleThreadScheduledExecutor`) |
@@ -284,11 +282,10 @@ Compare-and-set / read-modify-write call sites:
 | One-shot subscription initialization guard | `MarketDataSubscriptionManager.initialized` |
 | Bounded stream slots (`MAX_STREAMS = 5`) via CAS loop | `TickByTickManager.tryRequestStream` |
 | Request pacing `Thread.sleep(500)` / `Thread.sleep(10)` / `Thread.sleep(50)` | `MarketDataSubscriptionManager.initializeIfNeeded`, `resubscribeAfterDataLoss` |
-| Request pacing `wait = 250` ms between what-if orders and `Thread.sleep(Duration.ofMinutes(5))` per cycle | `MarginPacer.run` |
 | Swing single-thread confinement | `SwingUtilities.invokeLater` in `Main.main` and `BlackboardMonitor.updateDashboardData` |
 | Receiver shutdown join | `OptionsIndicatorFrameReceiver.stop` — `thread.join(2000)` |
 | Process liveness barrier | `Main.main` — `new CountDownLatch(1).await()` |
-| Interrupt-based cooperative stop | `AbstractStrategy.run`, `MarginPacer.run`, `EarningsRefresher.run`, `MarketCalendarRefresher.run`, `BlackboardMonitor.startDataRefreshThread` — all loop on `!Thread.currentThread().isInterrupted()` and re-assert the flag in their `InterruptedException` handlers |
+| Interrupt-based cooperative stop | `AbstractStrategy.run`, `EarningsRefresher.run`, `MarketCalendarRefresher.run`, `BlackboardMonitor.startDataRefreshThread` — all loop on `!Thread.currentThread().isInterrupted()` and re-assert the flag in their `InterruptedException` handlers |
 
 ---
 
@@ -316,8 +313,6 @@ Compare-and-set / read-modify-write call sites:
 | `activeBracket` | `volatile BracketOrder` | `setActiveBracket` |
 | `isTradeable` | `volatile boolean` | `setTradeable` |
 | `lastUpdate` | `volatile long` | `refreshLastUpdate` (called by every setter that ends with it) |
-| `longMarginRate`, `shortMarginRate` | `volatile double` | `setLongMarginRate`, `setShortMarginRate` |
-| `longMarginRateVerified`, `shortMarginRateVerified` | `volatile boolean` | `setLongMarginRateVerified`, `setShortMarginRateVerified` |
 | `lastPrice`, `bid`, `ask`, `markPrice`, `dailyHigh`, `dailyLow`, `open`, `previousClose`, `dailyVWAP` | `volatile double` | `setLastPrice`, `setBid`, `setAsk`, `setMarkPrice`, `setDailyHigh`, `setDailyLow`, `setOpen`, `setPreviousClose`, `setDailyVWAP` |
 | `sma10`, `sma20`, `sma50`, `sma100`, `sma200` | `volatile double` | `setSma10`, `setSma20`, `setSma50`, `setSma100`, `setSma200` |
 | `bidSize`, `askSize`, `lastSize` | `volatile Decimal` | `setBidSize`, `setAskSize`, `setLastSize` |
@@ -560,7 +555,7 @@ Compare-and-set / read-modify-write call sites:
 | `MinuteVolumeTracker.VolumeWindow` | `sessionDate` | `LocalDate`, guarded by the window monitor | `commit` |
 | `MinuteVolumeTracker.VolumeWindow` | `pending` | `MinuteBar`, guarded by the window monitor | `setPending` |
 
-`SizeTickHandler`, `MinuteBarHandler`, `AccountEventHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, and `MarginPacer` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
+`SizeTickHandler`, `MinuteBarHandler`, `AccountEventHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, `UniverseReference`, and `ConcentrationLimits` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
 
 ### 3.25 `mwd.trading.ui.BlackboardMonitor`
 

@@ -69,7 +69,9 @@ No `Blackboard` reference. The single instance is created inside the `Blackboard
 
 ### 1. Class/Interface Responsibilities
 
-Per-ticker mutable value holder for the IBKR `Contract`, active `BracketOrder`, margin rates and verification flags, tick prices and sizes, moving averages, volumes, ATR values, RSI, implied-move/gamma-flip mirror values, portfolio figures, the next earnings instant, and the last minute `Bar`. The per-ticker
+Per-ticker mutable value holder for the IBKR `Contract`, active `BracketOrder`, tick prices and sizes, moving averages, volumes, ATR values, RSI, implied-move/gamma-flip mirror values, portfolio figures, the next earnings instant, and the last minute `Bar`. Margin rates
+are no longer held here: they are configuration, read from
+`mwd.trading.risk.UniverseReference`. The per-ticker
 `PositionState` is derived from the active bracket and the caller's ownership answer
 rather than stored.
 
@@ -95,16 +97,6 @@ public PositionState positionState(boolean owned)
 public boolean isTradeable()
 public void setTradeable(boolean tradeable)
 private void refreshLastUpdate()
-
-public boolean isLongMarginRateVerified()
-public boolean isShortMarginRateVerified()
-public void setLongMarginRateVerified(boolean verified)
-public void setShortMarginRateVerified(boolean verified)
-public double calculateMarginRequirement(String action, Decimal qty, double price)
-public double getLongMarginRate()
-public double getShortMarginRate()
-public void setLongMarginRate(double rate)
-public void setShortMarginRate(double rate)
 
 public void setContract(Contract contract)
 public void setActiveBracket(BracketOrder bracket)
@@ -214,7 +206,7 @@ Mapping, verbatim from `positionStateOf`:
 
 **Volatile fields**
 
-`activeBracket`, `isTradeable`, `lastUpdate`, `longMarginRate`, `shortMarginRate`, `longMarginRateVerified`, `shortMarginRateVerified`, `lastPrice`, `bid`, `ask`, `markPrice`, `dailyHigh`, `dailyLow`, `open`, `previousClose`, `dailyVWAP`, `sma10`, `sma20`, `sma50`, `sma100`, `sma200`, `bidSize`, `askSize`, `lastSize`, `intradayVolume`, `lastMinuteVolume`, `averageLast15MinuteVolume`, `averageDailyVolume`, `gammaFlip`, `dailyImpliedMove`, `weeklyImpliedMove`, `monthlyImpliedMove`, `intradayATR4`, `intradayATR5`, `intradayATR12`, `intradayATR15`, `dailyATR`, `relativeStrengthIndex`, `positionSize`, `averageCost`, `marketValue`, `realizedPnL`, `unrealizedPnl`, `lastMinuteBar`.
+`activeBracket`, `isTradeable`, `lastUpdate`, `lastPrice`, `bid`, `ask`, `markPrice`, `dailyHigh`, `dailyLow`, `open`, `previousClose`, `dailyVWAP`, `sma10`, `sma20`, `sma50`, `sma100`, `sma200`, `bidSize`, `askSize`, `lastSize`, `intradayVolume`, `lastMinuteVolume`, `averageLast15MinuteVolume`, `averageDailyVolume`, `gammaFlip`, `dailyImpliedMove`, `weeklyImpliedMove`, `monthlyImpliedMove`, `intradayATR4`, `intradayATR5`, `intradayATR12`, `intradayATR15`, `dailyATR`, `relativeStrengthIndex`, `positionSize`, `averageCost`, `marketValue`, `realizedPnL`, `unrealizedPnl`, `lastMinuteBar`.
 
 Non-volatile fields: `ticker` (final), `contract`, `nextEarningsDate`.
 

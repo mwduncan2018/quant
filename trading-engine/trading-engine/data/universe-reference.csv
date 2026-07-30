@@ -1,0 +1,52 @@
+# Per-ticker reference data: GICS sector and IBKR margin rates.
+#
+# Rates are a fraction of notional, so 0.50 means 50%. Collect them from
+# IBKR's margin calculator, which shows Reg-T and Portfolio figures in the same
+# result panel - record both while you are there and switching MARGIN_METHODOLOGY
+# later becomes a config change rather than another collection pass.
+#
+#   https://www.interactivebrokers.com/en/trading/margin-calculator.php
+#
+# Enter the ticker with a positive value for the long rate and a negative value
+# for the short rate, then divide the INITIAL margin figure by the position value.
+# Use Initial rather than Maintenance: sizing asks what opening a position costs
+# in buying power, which is the initial requirement.
+#
+# A blank rate falls back to DEFAULT_LONG_MARGIN_RATE / DEFAULT_SHORT_MARGIN_RATE
+# and is named in a startup warning. The sectors below are a DRAFT and have not
+# been verified against a GICS source - several are commonly misfiled (V and PYPL
+# are Financials, not Information Technology; UBER is Industrials).
+#
+# retrieved: 2026-07-30
+# source: https://www.interactivebrokers.com/en/trading/margin-calculator.php
+ticker,sector,regt_long,regt_short,pm_long,pm_short
+AAPL,INFORMATION_TECHNOLOGY,,,,
+AMD,INFORMATION_TECHNOLOGY,,,,
+AMZN,CONSUMER_DISCRETIONARY,,,,
+AVGO,INFORMATION_TECHNOLOGY,,,,
+BABA,CONSUMER_DISCRETIONARY,,,,
+BAC,FINANCIALS,,,,
+C,FINANCIALS,,,,
+CAT,INDUSTRIALS,,,,
+COST,CONSUMER_STAPLES,,,,
+CRM,INFORMATION_TECHNOLOGY,,,,
+CVX,ENERGY,,,,
+DIS,COMMUNICATION_SERVICES,,,,
+GOOGL,COMMUNICATION_SERVICES,,,,
+GS,FINANCIALS,,,,
+HOOD,FINANCIALS,,,,
+INTC,INFORMATION_TECHNOLOGY,,,,
+JPM,FINANCIALS,,,,
+META,COMMUNICATION_SERVICES,,,,
+MSFT,INFORMATION_TECHNOLOGY,,,,
+MU,INFORMATION_TECHNOLOGY,,,,
+NFLX,COMMUNICATION_SERVICES,,,,
+NVDA,INFORMATION_TECHNOLOGY,,,,
+PLTR,INFORMATION_TECHNOLOGY,,,,
+PYPL,FINANCIALS,,,,
+SOFI,FINANCIALS,,,,
+TSLA,CONSUMER_DISCRETIONARY,,,,
+UBER,INDUSTRIALS,,,,
+UNH,HEALTH_CARE,,,,
+V,FINANCIALS,,,,
+XOM,ENERGY,,,,

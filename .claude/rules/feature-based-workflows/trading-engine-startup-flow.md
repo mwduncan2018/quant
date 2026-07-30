@@ -40,7 +40,8 @@ the TWS API handshake to the point where strategy threads are running.
 | `mwd.trading.optionsproxy.OptionsIndicatorFrameReceiver` | Constructed and started only when `config.isOptionsProxyEnabled()`. |
 | `mwd.trading.earnings.EarningsStore` / `EarningsClient` / `EarningsRefresher` | Constructed and started on their own thread only when `config.isEarningsEnabled()`. |
 | `mwd.trading.calendar.MarketCalendarStore` / `MarketCalendarClient` / `MarketCalendarRefresher` | Constructed and started unconditionally on their own thread. |
-| `mwd.trading.risk.MarginPacer` | `Runnable` constructed from `Blackboard`, `sessionManager.client()`, and `TradingGate`. |
+| `mwd.trading.risk.UniverseReference` | Loaded from `config.getUniverseReferencePath()`; its coverage report and age are logged before any strategy starts. |
+| `mwd.trading.risk.ConcentrationLimits` | Constructed from `Blackboard`, the reference table, and the three cap settings. |
 | `mwd.trading.ui.BlackboardMonitor` | Swing monitor constructed via `SwingUtilities.invokeLater` when `config.showUI()`. |
 | `mwd.trading.execution.BracketOrderExecutor` | Single `BracketOrderGateway` instance shared by all three strategies. |
 | `mwd.trading.strategy.AbstractStrategy` | `Runnable` base wrapped by `Main.strategyThread(AbstractStrategy)`. |
@@ -95,11 +96,19 @@ the TWS API handshake to the point where strategy threads are running.
     **Receiving Component:** `OptionsIndicatorFrameReceiver`
 
 11. **Initiating Component:** `Main`
-    **Method Invocation:** `new Thread(earningsRefresher, "Earnings-Refresher-Thread").start()`, `new Thread(marketCalendarRefresher, "Market-Calendar-Refresher-Thread").start()`, `new Thread(marginPacer, "Margin-Pacer-Thread").start()` — each `setDaemon(true)`
-    **Receiving Component:** `EarningsRefresher`, `MarketCalendarRefresher`, `MarginPacer`
+    **Method Invocation:** `new Thread(earningsRefresher, "Earnings-Refresher-Thread").start()` and `new Thread(marketCalendarRefresher, "Market-Calendar-Refresher-Thread").start()` — each `setDaemon(true)`
+    **Receiving Component:** `EarningsRefresher`, `MarketCalendarRefresher`
+
+11a. **Initiating Component:** `Main`
+    **Method Invocation:** `UniverseReference.load(Path.of(config.getUniverseReferencePath()), MarginMethodology.parse(config.getMarginMethodology()), config.getDefaultLongMarginRate(), config.getDefaultShortMarginRate())`, then `describeCoverage(...)` logged line by line and `ageInDays(...)` warned past `config.getUniverseReferenceMaxAgeDays()`
+    **Receiving Component:** `UniverseReference`
+
+11b. **Initiating Component:** `Main`
+    **Method Invocation:** `new ConcentrationLimits(blackboard, universeReference, config.getMaxTickerExposurePercent(), config.getMaxSectorExposurePercent(), config.getMinPositionNotional())`
+    **Receiving Component:** `ConcentrationLimits`
 
 12. **Initiating Component:** `Main`
-    **Method Invocation:** `SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard))` guarded by `config.showUI()`
+    **Method Invocation:** `SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard, universeReference))` guarded by `config.showUI()`
     **Receiving Component:** `BlackboardMonitor`
 
 13. **Initiating Component:** `Main`
@@ -179,7 +188,7 @@ the TWS API handshake to the point where strategy threads are running.
     **Receiving Component:** `ReconciliationManager.onDisconnected(String)`, `MarketDataSubscriptionManager.markAllStale()`, `IbkrSessionManager.scheduleReconnect()`
 
 31. **Initiating Component:** `Trading-Engine-Shutdown` hook thread
-    **Method Invocation:** `strategyThreads.forEach(Thread::interrupt)`, `marginPacerThread.interrupt()`, `earningsRefresherForShutdown.interrupt()`, `marketCalendarForShutdown.interrupt()`, `receiverForShutdown.stop()`, `sessionManager.close()`, `reconciliationManager.close()`, `LogManager.shutdown()`
+    **Method Invocation:** `strategyThreads.forEach(Thread::interrupt)`, `earningsRefresherForShutdown.interrupt()`, `marketCalendarForShutdown.interrupt()`, `receiverForShutdown.stop()`, `sessionManager.close()`, `reconciliationManager.close()`, `LogManager.shutdown()`
     **Receiving Component:** each named component
 
 ## 3. Data Payloads and State Handoffs
@@ -188,8 +197,8 @@ the TWS API handshake to the point where strategy threads are running.
 
 - `Config` → every constructed component that reads settings; passed by reference and never mutated.
 - `List<String> marketDataSymbols` → `MarketDataSubscriptionManager` (as `List.copyOf`), `ReconciliationManager` (as `Set.copyOf`), `OptionsIndicatorStore` (as `Set.copyOf`), `EarningsStore` (as `Set.copyOf`).
-- `Blackboard` → shared by the handlers, trackers, executor, margin pacer, monitor, and all three strategies.
-- `EClientSocket` (obtained via `sessionManager.client()`) → `MarketDataSubscriptionManager`, `TickByTickManager`, `MarginPacer`, `BracketOrderExecutor`, `ReconciliationManager`.
+- `Blackboard` → shared by the handlers, trackers, executor, concentration limits, monitor, and all three strategies.
+- `EClientSocket` (obtained via `sessionManager.client()`) → `MarketDataSubscriptionManager`, `TickByTickManager`, `BracketOrderExecutor`, `ReconciliationManager`.
 - `IntSupplier` `blackboard::getNextRequestId` → `ReconciliationManager`, used in `begin(String)`.
 - `OptionsIndicatorFrameReceiver.AcceptedFrameListener` lambda `frame -> Main.mirrorFrameForMonitor(blackboard, frame)` → `OptionsIndicatorFrameReceiver`.
 - `Consumer<EarningsSnapshot>` lambda `snapshot -> Main.mirrorEarningsForMonitor(blackboard, snapshot)` → `EarningsRefresher`.
@@ -204,7 +213,7 @@ the TWS API handshake to the point where strategy threads are running.
 | `IBKR-Reader` | `IBKR-Session-Lifecycle` | `onNextValidId()` and `onError(1101/1102)` re-post work with `lifecycleExecutor.execute(...)` |
 | `IBKR-Reader` | `IBKR-Reconciliation-Timeout` | `ReconciliationManager.begin` schedules `failEpoch` on its own single-thread scheduler |
 | Main thread | Three `<StrategyClassSimpleName>-Thread` daemon threads | `Main.strategyThread(AbstractStrategy)` + `Thread::start` |
-| Main thread | `Earnings-Refresher-Thread`, `Market-Calendar-Refresher-Thread`, `Margin-Pacer-Thread` daemon threads | explicit `Thread` construction and `start()` |
+| Main thread | `Earnings-Refresher-Thread`, `Market-Calendar-Refresher-Thread` daemon threads | explicit `Thread` construction and `start()` |
 | Main thread | `Options-Proxy-UDP-Receiver` daemon thread | `OptionsIndicatorFrameReceiver.start()` |
 | Main thread | Swing event-dispatch thread | `SwingUtilities.invokeLater(...)` |
 | JVM shutdown | `Trading-Engine-Shutdown` thread | `Runtime.addShutdownHook` |

@@ -17,7 +17,7 @@ Sources:
 
 ### 1. Class/Interface Responsibilities
 
-Declares the read-only accessors for every engine setting. Market-data quality (`isLiveIBKRData`) and the traded account (`isLiveTrading`) are separate accessors so that a real-time subscription can be enabled without redirecting order flow. Covers IBKR connection and account values, strategy poll rate and position cap, trading-state path, per-strategy symbol sets, options-proxy UDP settings, market-data age limit, and earnings/calendar endpoint settings.
+Declares the read-only accessors for every engine setting. Market-data quality (`isLiveIBKRData`) and the traded account (`isLiveTrading`) are separate accessors so that a real-time subscription can be enabled without redirecting order flow. Covers IBKR connection and account values, strategy poll rate and position cap, trading-state path, per-strategy symbol sets, options-proxy UDP settings, market-data age limit, earnings/calendar endpoint settings, the margin regime and per-ticker reference table, and the concentration caps.
 
 ### 2. Injected Dependencies
 
@@ -46,6 +46,14 @@ String getOptionsProxyBindHost()
 int getOptionsProxyUdpPort()
 long getOptionsProxyFrameMaxAgeMs()
 long getMarketDataMaxAgeMs()
+String getMarginMethodology()
+String getUniverseReferencePath()
+double getDefaultLongMarginRate()
+double getDefaultShortMarginRate()
+long getUniverseReferenceMaxAgeDays()
+double getMaxTickerExposurePercent()
+double getMaxSectorExposurePercent()
+double getMinPositionNotional()
 boolean isEarningsEnabled()
 String getEarningsEndpointUrl()
 long getEarningsConnectTimeoutMs()
@@ -94,6 +102,14 @@ Instance fields initialised with defaults:
 | `optionsProxyUdpPort` | `int` | `5005` |
 | `optionsProxyFrameMaxAgeMs` | `long` | `5000` |
 | `marketDataMaxAgeMs` | `long` | `30000` |
+| `marginMethodology` | `String` | `"REG_T"` |
+| `universeReferencePath` | `String` | `"data/universe-reference.csv"` |
+| `defaultLongMarginRate` | `double` | `0.50` |
+| `defaultShortMarginRate` | `double` | `0.50` |
+| `universeReferenceMaxAgeDays` | `long` | `30` |
+| `maxTickerExposurePercent` | `double` | `30.0` |
+| `maxSectorExposurePercent` | `double` | `50.0` |
+| `minPositionNotional` | `double` | `2000.0` |
 | `earningsEnabled` | `boolean` | `true` |
 | `earningsEndpointUrl` | `String` | `"http://127.0.0.1:8000/earnings"` |
 | `earningsConnectTimeoutMs` | `long` | `3000` |
@@ -132,6 +148,14 @@ private Set<String> symbolsFor(String strategyId, String suffix)
 @Override public int getOptionsProxyUdpPort()
 @Override public long getOptionsProxyFrameMaxAgeMs()
 @Override public long getMarketDataMaxAgeMs()
+@Override public String getMarginMethodology()
+@Override public String getUniverseReferencePath()
+@Override public double getDefaultLongMarginRate()
+@Override public double getDefaultShortMarginRate()
+@Override public long getUniverseReferenceMaxAgeDays()
+@Override public double getMaxTickerExposurePercent()
+@Override public double getMaxSectorExposurePercent()
+@Override public double getMinPositionNotional()
 @Override public boolean isEarningsEnabled()
 @Override public String getEarningsEndpointUrl()
 @Override public long getEarningsConnectTimeoutMs()

@@ -107,7 +107,6 @@ Consequences worth stating, all verbatim from the source:
 |---|---|---|
 | `activeBracket` | `Stock` | `private volatile BracketOrder activeBracket;` — `null` / non-`null` |
 | `isTradeable` | `Stock` | `private volatile boolean isTradeable = true;` |
-| `longMarginRateVerified`, `shortMarginRateVerified` | `Stock` | `private volatile boolean ... = false;` |
 | `systemHalted` | `Blackboard` | `private volatile boolean systemHalted = false;` |
 | `systemUpdateRequired` | `Blackboard` | `private volatile boolean systemUpdateRequired = false;` |
 | `openOrderEnd` | `Blackboard` | `private volatile boolean openOrderEnd = false;` |
@@ -208,7 +207,7 @@ It is invoked from `evaluateNewEntry` when, after the claim is held:
 
 #### Reader-thread effects that no longer write position state
 
-`OrderLifecycleHandler.markPositionOpen(BracketOrder, Stock)` now only calls
+`OrderLifecycleHandler.markPositionOpen(BracketOrder)` now only calls
 `blackboard.releaseGlobalPending(...)`; the `OPEN` reading follows from the status
 it set on the bracket. `OrderLifecycleHandler.completeConfirmedFlat(BracketOrder)`
 clears `stock.setActiveBracket(null)` when it still points at that bracket and
@@ -228,9 +227,8 @@ document.
 
 - **Controlling Method:** `public void onOpenOrder(int orderIdentifier, Contract contract, Order order, OrderState orderState)` (`OrderLifecycleHandler`)
 - **Transition Conditions:**
-  1. `!order.whatIf()`
-  2. `resolveBracket(orderIdentifier, order.permId(), order.orderRef()) != null`
-  3. `bracketOrder.isParentOrderId(orderIdentifier)`
+  1. `resolveBracket(orderIdentifier, order.permId(), order.orderRef()) != null`
+  2. `bracketOrder.isParentOrderId(orderIdentifier)`
 - **Adjacent halts (do not change `Status`):** `Math.abs(order.lmtPrice() - bracketOrder.getEntryPrice()) > 0.0001`; `!order.totalQuantity().equals(bracketOrder.getTotalQuantity())`
 
 #### -> WORKING_PARENT (status callback)
@@ -509,8 +507,6 @@ document.
 | `systemUpdateRequired` `false` -> `true` | `IbkrErrorHandler.process(int reqId, int errorCode, String errorMsg, String advancedOrderRejectJson)` | `reqId <= 0` and `errorCode` in `{503, 505, 507, 508, 323}` |
 | `openOrderEnd` `false` -> `true` | `OrderLifecycleHandler.onOpenOrderEnd()` | unconditional |
 | `isTradeable` `true` -> `false` | `AbstractStrategy.processSymbolSafely(Stock stock)` | `catch (RuntimeException)` |
-| `longMarginRateVerified` `false` -> `true` | `OrderLifecycleHandler.processWhatIf(Contract contract, Order order, OrderState orderState)` | `order.whatIf()`, `notionalValue > 0`, `order.action() == Action.BUY` |
-| `shortMarginRateVerified` `false` -> `true` | `OrderLifecycleHandler.processWhatIf(...)` | `order.whatIf()`, `notionalValue > 0`, `order.action() != Action.BUY` |
 
 No source location resets `systemHalted`, `systemUpdateRequired`, `openOrderEnd`, or `isTradeable` to `false`.
 

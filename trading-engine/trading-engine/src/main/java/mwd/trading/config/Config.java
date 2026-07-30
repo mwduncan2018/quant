@@ -49,6 +49,39 @@ public interface Config {
 	 */
 	long getMarketDataMaxAgeMs();
 
+	/**
+	 * Which IBKR margin regime the account is on, selecting which pair of rates
+	 * in the reference table applies.
+	 */
+	String getMarginMethodology();
+
+	/** Path to the per-ticker reference table of sectors and margin rates. */
+	String getUniverseReferencePath();
+
+	/**
+	 * Rate used for a traded symbol with no configured one. Deliberately
+	 * conservative: a forgotten symbol should under-size, not over-leverage.
+	 */
+	double getDefaultLongMarginRate();
+
+	double getDefaultShortMarginRate();
+
+	/** Age past which the reference table is reported as stale at startup. */
+	long getUniverseReferenceMaxAgeDays();
+
+	/** Most of net liquidation, as a percent, that may ride on one symbol. */
+	double getMaxTickerExposurePercent();
+
+	/** Most of net liquidation, as a percent, that may ride on one GICS sector. */
+	double getMaxSectorExposurePercent();
+
+	/**
+	 * Below this notional a trimmed entry is refused rather than sent, because a
+	 * position that small gives its edge back in costs while still consuming one
+	 * of the active-position slots.
+	 */
+	double getMinPositionNotional();
+
 	/** Whether the engine pulls earnings dates from the options proxy. */
 	boolean isEarningsEnabled();
 

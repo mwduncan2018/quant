@@ -34,11 +34,19 @@ import mwd.trading.execution.UncertainOrderSubmissionException;
 import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketSnapshot;
+import mwd.trading.risk.ConcentrationLimits;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
 
 class AbstractStrategyLifecycleTest {
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            List.of("AAPL,INFORMATION_TECHNOLOGY,0.25,0.25,0.25,0.25",
+                    "MSFT,INFORMATION_TECHNOLOGY,0.25,0.25,0.25,0.25"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     @Test
     void oneCycleManagesEveryOpenPositionWithoutBlocking() {
         Fixture fixture = fixture(Set.of("AAPL", "MSFT"), 1000);
@@ -280,6 +288,12 @@ class AbstractStrategyLifecycleTest {
          */
         void refreshAccount() {
             clock.advanceMillis(1);
+            // An IBKR account batch carries the balances alongside the timestamp,
+            // and the concentration limits need a net liquidation to take a
+            // percentage of. A fixture that stamped only the time would leave
+            // them unable to compute any headroom, which is a refusal.
+            blackboard.getAccount().setNetLiquidation(100_000.0);
+            blackboard.getAccount().setAvailableFunds(50_000.0);
             blackboard.getAccount().setLastRefreshedAtMillis(clock.millis());
         }
 
@@ -323,6 +337,9 @@ class AbstractStrategyLifecycleTest {
                     config,
                     tradingGate,
                     freshness,
+                    UNIVERSE_REFERENCE,
+                    new ConcentrationLimits(
+                            blackboard, UNIVERSE_REFERENCE, 100.0, 100.0, 0.0),
                     universe,
                     clock);
             this.direction = direction;
