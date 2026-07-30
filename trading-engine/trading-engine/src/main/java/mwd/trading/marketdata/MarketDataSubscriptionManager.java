@@ -109,7 +109,8 @@ public final class MarketDataSubscriptionManager {
                 RequestRegistry.DataConsumer.ATR_MINUTE_WILDERS,
                 RequestRegistry.DataConsumer.RSI,
                 RequestRegistry.DataConsumer.VOLUME,
-                RequestRegistry.DataConsumer.TICK_BAR);
+                RequestRegistry.DataConsumer.TICK_BAR,
+                RequestRegistry.DataConsumer.VWAP);
         minuteHistoryRequests.put(ticker, requestId);
         client.reqHistoricalData(requestId, contract, "", "2 D", "1 min", "TRADES", 1, 1, true, null);
     }

@@ -19,8 +19,9 @@ recording, and strategy consumption.
 | `mwd.trading.broker.ibkr.RequestRegistry` | Stores `reqId -> (ticker, EnumSet<DataConsumer>)` and answers `getTickerFor(int)` / `getConsumersFor(int)`. |
 | `mwd.trading.broker.ibkr.RequestRegistry.DataConsumer` | Enum whose members select which handler receives a callback. |
 | `mwd.trading.broker.ibkr.EWrapperRaptor` | `EWrapper` implementation that resolves consumers per `reqId` and dispatches each callback to the matching handlers. |
-| `mwd.trading.broker.ibkr.TickMap` | Classifies an IBKR tick field number into bid/ask/last/mark/open/close/high/low/VWAP and the size variants. |
-| `mwd.trading.marketdata.PriceTickHandler` | Validates prices, writes them to `Stock`, and records `LAST_PRICE`, `PREVIOUS_CLOSE`, `DAILY_VWAP`. |
+| `mwd.trading.broker.ibkr.TickMap` | Classifies an IBKR tick field number into bid/ask/last/mark/open/close/high/low and the size variants. |
+| `mwd.trading.marketdata.PriceTickHandler` | Validates prices, writes them to `Stock`, and records `LAST_PRICE` and `PREVIOUS_CLOSE`. |
+| `mwd.trading.indicator.DailyVwapTracker` | Derives the session VWAP from the minute-bar stream, writes it to `Stock`, and records `DAILY_VWAP`. |
 | `mwd.trading.marketdata.SizeTickHandler` | Validates sizes and writes bid/ask/last size, intraday volume, and average daily volume to `Stock`. |
 | `mwd.trading.marketdata.MinuteBarHandler` | Validates a `Bar`, stores it as the last minute bar, and records `MINUTE_BAR`. |
 | `mwd.trading.indicator.MinuteVolumeTracker` | Maintains the per-session completed-bar window, writes both minute-volume figures, and records `MINUTE_VOLUME_BASELINE` once the window is full. |
@@ -62,7 +63,7 @@ recording, and strategy consumption.
    **Receiving Component:** `RequestRegistry`, `EClientSocket`
 
 6. **Initiating Component:** `MarketDataSubscriptionManager.requestMinuteHistory(String, Contract)`
-   **Method Invocation:** `registry.register(requestId, ticker, DataConsumer.ATR_MINUTE_WILDERS, DataConsumer.RSI, DataConsumer.VOLUME, DataConsumer.TICK_BAR)` then `client.reqHistoricalData(requestId, contract, "", "2 D", "1 min", "TRADES", 1, 1, true, null)`
+   **Method Invocation:** `registry.register(requestId, ticker, DataConsumer.ATR_MINUTE_WILDERS, DataConsumer.RSI, DataConsumer.VOLUME, DataConsumer.TICK_BAR, DataConsumer.VWAP)` then `client.reqHistoricalData(requestId, contract, "", "2 D", "1 min", "TRADES", 1, 1, true, null)`
    **Receiving Component:** `RequestRegistry`, `EClientSocket`
 
 7. **Initiating Component:** `MarketDataSubscriptionManager.requestLiveMarketData(String, Contract)`
@@ -84,11 +85,11 @@ recording, and strategy consumption.
     **Receiving Component:** `PriceTickHandler`, `SimpleMovingAverageTracker`
 
 11. **Initiating Component:** `PriceTickHandler.onTickPrice(...)`
-    **Method Invocation:** `registry.getTickerFor(reqId)`, `blackboard.getStock(ticker)`, `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow/isVwap(field)`
+    **Method Invocation:** `registry.getTickerFor(reqId)`, `blackboard.getStock(ticker)`, `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow(field)`
     **Receiving Component:** `RequestRegistry`, `Blackboard`, `TickMap`
 
 12. **Initiating Component:** `PriceTickHandler.onTickPrice(...)`
-    **Method Invocation:** `stock.setLastPrice(double)` + `inputStore.record(ticker, MarketDataInput.LAST_PRICE)`; `stock.setPreviousClose(double)` + `inputStore.record(ticker, MarketDataInput.PREVIOUS_CLOSE)`; `stock.setDailyVWAP(double)` + `inputStore.record(ticker, MarketDataInput.DAILY_VWAP)`; other fields are written without a readiness record
+    **Method Invocation:** `stock.setLastPrice(double)` + `inputStore.record(ticker, MarketDataInput.LAST_PRICE)`; `stock.setPreviousClose(double)` + `inputStore.record(ticker, MarketDataInput.PREVIOUS_CLOSE)`; other fields are written without a readiness record. VWAP is not among them: IBKR publishes no VWAP price tick, so `DailyVwapTracker` derives it from the minute bars instead
     **Receiving Component:** `Stock`, `MarketDataInputStore`
 
 13. **Initiating Component:** `EWrapperRaptor.tickSize(int reqId, int field, Decimal size)`
@@ -102,16 +103,16 @@ recording, and strategy consumption.
     **Receiving Component:** `EWrapperRaptor`
 
 15. **Initiating Component:** `EWrapperRaptor.historicalData(...)`
-    **Method Invocation:** per consumer flag — `intradayWilderAtrTracker.onHistoricalData(reqId, bar)`, `dailyWilderAtrCalculator.onHistoricalData(reqId, bar)`, `simpleMovingAverageTracker.onHistoricalData(reqId, bar)`, `rsiTracker.onHistoricalData(reqId, bar)`, `minuteVolumeTracker.onHistoricalData(reqId, bar)`, `minuteBarHandler.onHistoricalData(reqId, bar)`
-    **Receiving Component:** the six indicator/market-data consumers
+    **Method Invocation:** per consumer flag — `intradayWilderAtrTracker.onHistoricalData(reqId, bar)`, `dailyWilderAtrCalculator.onHistoricalData(reqId, bar)`, `simpleMovingAverageTracker.onHistoricalData(reqId, bar)`, `rsiTracker.onHistoricalData(reqId, bar)`, `minuteVolumeTracker.onHistoricalData(reqId, bar)`, `minuteBarHandler.onHistoricalData(reqId, bar)`, `dailyVwapTracker.onHistoricalData(reqId, bar)`
+    **Receiving Component:** the seven indicator/market-data consumers
 
 16. **Initiating Component:** `EWrapperRaptor.historicalDataUpdate(int reqId, Bar bar)`
-    **Method Invocation:** `intradayWilderAtrTracker.onHistoricalDataUpdate`, `rsiTracker.onHistoricalDataUpdate`, `minuteVolumeTracker.onHistoricalDataUpdate`, `minuteBarHandler.onHistoricalDataUpdate`
-    **Receiving Component:** the four update consumers
+    **Method Invocation:** `intradayWilderAtrTracker.onHistoricalDataUpdate`, `rsiTracker.onHistoricalDataUpdate`, `minuteVolumeTracker.onHistoricalDataUpdate`, `minuteBarHandler.onHistoricalDataUpdate`, `dailyVwapTracker.onHistoricalDataUpdate`
+    **Receiving Component:** the five update consumers
 
 17. **Initiating Component:** `EWrapperRaptor.historicalDataEnd(int reqId, String startDate, String endDate)`
-    **Method Invocation:** `onHistoricalDataEnd(reqId, startDate, endDate)` on `IntradayWilderAtrTracker`, `DailyWilderAtrCalculator`, `SimpleMovingAverageTracker`, `RsiTracker`, `MinuteVolumeTracker`
-    **Receiving Component:** the five consumers declaring that request
+    **Method Invocation:** `onHistoricalDataEnd(reqId, startDate, endDate)` on `IntradayWilderAtrTracker`, `DailyWilderAtrCalculator`, `SimpleMovingAverageTracker`, `RsiTracker`, `MinuteVolumeTracker`, `DailyVwapTracker`
+    **Receiving Component:** the six consumers declaring that request
 
 18. **Initiating Component:** `MinuteBarHandler.updateLastMinuteBar(int, Bar)`
     **Method Invocation:** `registry.getTickerFor(reqId)`, `isUsable(bar)`, `stock.setLastMinuteBar(bar)`, `inputStore.record(ticker, MarketDataInput.MINUTE_BAR)`

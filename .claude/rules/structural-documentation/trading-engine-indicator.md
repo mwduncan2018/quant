@@ -6,11 +6,83 @@ paths:
 # Package `mwd.trading.indicator`
 
 Sources:
+- `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/DailyVwapTracker.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/DailyWilderAtrCalculator.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/IntradayWilderAtrTracker.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/MinuteVolumeTracker.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/RsiTracker.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/SimpleMovingAverageTracker.java`
+
+---
+
+## `DailyVwapTracker`
+
+`public class DailyVwapTracker`
+
+### 1. Class/Interface Responsibilities
+
+Maintains a per-ticker `VwapSession` of running volume-weighted sums in a `ConcurrentHashMap`, derives the session VWAP from the minute-bar stream, writes it to `Stock`, and records `MarketDataInput.DAILY_VWAP` in `MarketDataInputStore`. IBKR publishes no VWAP price tick in either the live or the delayed field set, so the figure is computed rather than received.
+
+### 2. Injected Dependencies
+
+Constructor: `public DailyVwapTracker(Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore)`
+
+| Parameter | Exact type |
+| --- | --- |
+| `blackboard` | `mwd.trading.state.Blackboard` |
+| `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
+| `inputStore` | `mwd.trading.marketdata.MarketDataInputStore` |
+
+Static fields: `private static final ZoneId NEW_YORK_ZONE`, `private static final DateTimeFormatter BAR_DATE`, `private static final int VWAP_SCALE = 6`, `private static final Logger logger`.
+
+### 3. Method Signatures
+
+Nested types:
+- `private record VwapBar(LocalDate sessionDate, long epochSecond, BigDecimal notional, BigDecimal volume)`
+- `private static final class VwapSession`
+
+```java
+public DailyVwapTracker(Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore)
+
+public void onHistoricalData(int reqId, Bar bar)
+public void onHistoricalDataUpdate(int reqId, Bar bar)
+public void onHistoricalDataEnd(int reqId, String start, String end)
+
+private void updateVwap(int reqId, Bar bar)
+private static VwapBar describe(String ticker, Bar bar)
+private static BigDecimal usableVolume(Bar bar)
+private static BigDecimal usablePrice(Bar bar)
+private static boolean isAllDigits(String value)
+```
+
+`VwapSession`:
+
+```java
+synchronized LocalDate sessionDate()
+synchronized void observe(VwapBar bar)
+synchronized BigDecimal vwap()
+```
+
+### 4. Global State Interactions
+
+**Concurrent collections**
+
+| Field | Declared type |
+| --- | --- |
+| `sessions` | `Map<String, VwapSession>` = `new ConcurrentHashMap<>()` |
+
+| Method | Interaction |
+| --- | --- |
+| `updateVwap(int, Bar)` | Mutates `sessions` (`computeIfAbsent`); inside `synchronized (session)` calls `observe(...)` and `vwap()` |
+| `onHistoricalDataEnd(int, String, String)` | Reads `sessions` (`get`), then `sessionDate()` and `vwap()` |
+
+`VwapSession` guards its `completedNotional`, `completedVolume`, `sessionDate`, and `pending` with the instance monitor.
+
+**Centralized state objects (`Blackboard`) and `MarketDataInputStore`**
+
+| Method | Interaction |
+| --- | --- |
+| `updateVwap(int, Bar)` | Reads `registry.getTickerFor(int)`; reads `blackboard.getStock(ticker)`; mutates `stock.setDailyVWAP(double)` and `inputStore.record(ticker, MarketDataInput.DAILY_VWAP)` when the session has traded volume |
 
 ---
 

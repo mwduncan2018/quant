@@ -53,9 +53,10 @@ public class TickMap {
 		return liveIBKRData() ? (field == 7) : (field == 73);
 	}
 
-	public boolean isVwap(int field) {
-		return liveIBKRData() ? (field == 459) : (field == 533);
-	}
+	// There is no isVwap. IBKR defines no VWAP price tick in either the live or
+	// the delayed field set — TickType runs 0 to 104 and neither 459 nor 533,
+	// which this method used to test for, exists. The session figure is derived
+	// from the minute bars by DailyVwapTracker.
 
 	/*
 	 * Tick Size

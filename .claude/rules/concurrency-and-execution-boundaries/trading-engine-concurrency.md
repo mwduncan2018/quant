@@ -73,9 +73,9 @@ Every `EWrapperRaptor` override runs on the reader thread. `EWrapperRaptor` perf
 | `tickSize` | `SizeTickHandler.onTickSize` |
 | `tickByTickBidAsk` | `PriceTickHandler.onTickByTickBidAsk`; `SizeTickHandler.onTickByTickBidAsk` |
 | `tickByTickAllLast` | `PriceTickHandler.onTickByTickAllLast`; `SizeTickHandler.onTickByTickAllLast` |
-| `historicalData` | `IntradayWilderAtrTracker.onHistoricalData`; `DailyWilderAtrCalculator.onHistoricalData`; `SimpleMovingAverageTracker.onHistoricalData`; `RsiTracker.onHistoricalData`; `MinuteVolumeTracker.onHistoricalData`; `MinuteBarHandler.onHistoricalData` |
-| `historicalDataEnd` | `IntradayWilderAtrTracker.onHistoricalDataEnd`; `DailyWilderAtrCalculator.onHistoricalDataEnd`; `SimpleMovingAverageTracker.onHistoricalDataEnd`; `RsiTracker.onHistoricalDataEnd`; `MinuteVolumeTracker.onHistoricalDataEnd` |
-| `historicalDataUpdate` | `IntradayWilderAtrTracker.onHistoricalDataUpdate`; `RsiTracker.onHistoricalDataUpdate`; `MinuteVolumeTracker.onHistoricalDataUpdate`; `MinuteBarHandler.onHistoricalDataUpdate` |
+| `historicalData` | `IntradayWilderAtrTracker.onHistoricalData`; `DailyWilderAtrCalculator.onHistoricalData`; `SimpleMovingAverageTracker.onHistoricalData`; `RsiTracker.onHistoricalData`; `MinuteVolumeTracker.onHistoricalData`; `MinuteBarHandler.onHistoricalData`; `DailyVwapTracker.onHistoricalData` |
+| `historicalDataEnd` | `IntradayWilderAtrTracker.onHistoricalDataEnd`; `DailyWilderAtrCalculator.onHistoricalDataEnd`; `SimpleMovingAverageTracker.onHistoricalDataEnd`; `RsiTracker.onHistoricalDataEnd`; `MinuteVolumeTracker.onHistoricalDataEnd`; `DailyVwapTracker.onHistoricalDataEnd` |
+| `historicalDataUpdate` | `IntradayWilderAtrTracker.onHistoricalDataUpdate`; `RsiTracker.onHistoricalDataUpdate`; `MinuteVolumeTracker.onHistoricalDataUpdate`; `MinuteBarHandler.onHistoricalDataUpdate`; `DailyVwapTracker.onHistoricalDataUpdate` |
 | `orderStatus` | `OrderLifecycleHandler.onOrderStatus` |
 | `openOrder` | `OrderLifecycleHandler.onOpenOrder` |
 | `openOrderEnd` | `OrderLifecycleHandler.onOpenOrderEnd` |
@@ -185,6 +185,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `Map<Integer, List<Double>> historyBuffer = new ConcurrentHashMap<>()` | `SimpleMovingAverageTracker` |
 | `Map<String, Double> sum199`, `sum99`, `sum49`, `sum19`, `sum9` — all `ConcurrentHashMap` | `SimpleMovingAverageTracker` |
 | `Map<String, VolumeWindow> windows = new ConcurrentHashMap<>()` | `MinuteVolumeTracker` |
+| `Map<String, VwapSession> sessions = new ConcurrentHashMap<>()` | `DailyVwapTracker` |
 | `Map<String, Long> lastUpdateTimestampMap = new ConcurrentHashMap<>()` | `BlackboardMonitor` |
 
 `Collections.synchronizedList(new ArrayList<>())` is the value type inserted into `historyBuffer` by `IntradayWilderAtrTracker.onHistoricalData`, `DailyWilderAtrCalculator.onHistoricalData`, `RsiTracker.onHistoricalData`, and `SimpleMovingAverageTracker.onHistoricalData`.
@@ -260,6 +261,7 @@ Compare-and-set / read-modify-write call sites:
 | Location | Monitor |
 |---|---|
 | `MinuteVolumeTracker.updateVolume` — `synchronized (window)` | the per-ticker `VolumeWindow` instance |
+| `DailyVwapTracker.updateVwap` — `synchronized (session)` | the per-ticker `VwapSession` instance |
 | `IntradayWilderAtrTracker.onHistoricalDataUpdate` — `synchronized (bars)` | the `Collections.synchronizedList` for that request id |
 | `RsiTracker.onHistoricalDataEnd` — `synchronized (bars)` | as above |
 | `RsiTracker.onHistoricalDataUpdate` — `synchronized (bars)` | as above |

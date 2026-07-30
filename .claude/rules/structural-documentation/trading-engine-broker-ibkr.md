@@ -46,6 +46,7 @@ Constructor: `public EWrapperRaptor(RequestRegistry, IntradayWilderAtrTracker, D
 | `sizeTickHandler` | `mwd.trading.marketdata.SizeTickHandler` |
 | `brokerTimeHandler` | `mwd.trading.broker.ibkr.callback.BrokerTimeHandler` |
 | `minuteVolumeTracker` | `mwd.trading.indicator.MinuteVolumeTracker` |
+| `dailyVwapTracker` | `mwd.trading.indicator.DailyVwapTracker` |
 
 Injected after construction via `attachLifecycle`: `volatile IbkrSessionManager sessionManager`, `volatile MarketDataSubscriptionManager marketDataSubscriptionManager`.
 
@@ -66,7 +67,8 @@ public EWrapperRaptor(
         PriceTickHandler priceTickHandler,
         SizeTickHandler sizeTickHandler,
         BrokerTimeHandler brokerTimeHandler,
-        MinuteVolumeTracker minuteVolumeTracker)
+        MinuteVolumeTracker minuteVolumeTracker,
+        DailyVwapTracker dailyVwapTracker)
 
 public void attachLifecycle(IbkrSessionManager sessionManager, MarketDataSubscriptionManager marketDataSubscriptionManager)
 
@@ -262,7 +264,7 @@ None. The class declares no constructor.
 ### 3. Method Signatures
 
 Nested types:
-- `public enum DataConsumer { ATR_MINUTE_WILDERS, ATR_DAILY_WILDERS, ERROR, MOVING_AVERAGE, NEXT_VALID_ID, RSI, TICK_BAR, TICK_PRICE, TICK_SIZE, VOLUME }`
+- `public enum DataConsumer { ATR_MINUTE_WILDERS, ATR_DAILY_WILDERS, ERROR, MOVING_AVERAGE, NEXT_VALID_ID, RSI, TICK_BAR, TICK_PRICE, TICK_SIZE, VOLUME, VWAP }`
 - `private static record ReqData(String ticker, EnumSet<DataConsumer> consumers)`
 
 ```java
@@ -301,7 +303,7 @@ No `Blackboard` reference.
 
 ### 1. Class/Interface Responsibilities
 
-Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`.
+Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`. It declares no VWAP predicate: IBKR defines no VWAP price tick in either set.
 
 ### 2. Injected Dependencies
 
@@ -325,7 +327,6 @@ public boolean isOpen(int field)
 public boolean isClose(int field)
 public boolean isHigh(int field)
 public boolean isLow(int field)
-public boolean isVwap(int field)
 
 public boolean isBidSize(int field)
 public boolean isAskSize(int field)

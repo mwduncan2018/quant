@@ -29,7 +29,7 @@ the TWS API handshake to the point where strategy threads are running.
 | `mwd.trading.broker.ibkr.callback.AccountEventHandler` | Constructed from `Blackboard` and `ReconciliationManager`. |
 | `mwd.trading.execution.OrderLifecycleHandler` | Constructed from `Blackboard`, `ReconciliationManager`, `JsonTradingStateStore`, and `TradingGate`. |
 | `mwd.trading.marketdata.MarketDataInputStore` | Per-input readiness store constructed with `config.getMarketDataMaxAgeMs()`. |
-| `mwd.trading.broker.ibkr.EWrapperRaptor` | `EWrapper` implementation constructed with the registry and all thirteen callback consumers; `attachLifecycle` is called after the session manager exists. |
+| `mwd.trading.broker.ibkr.EWrapperRaptor` | `EWrapper` implementation constructed with the registry and all fourteen callback consumers; `attachLifecycle` is called after the session manager exists. |
 | `mwd.trading.broker.ibkr.EWrapperAbstractBase` | Base class supplying default `EWrapper` methods. |
 | `mwd.trading.broker.ibkr.IbkrSessionManager` | Creates the `EClientSocket`, owns the lifecycle executor and reader thread, and drives connect/reconnect. |
 | `com.ib.client.EClientSocket` | TWS API socket constructed inside `IbkrSessionManager` from the wrapper and `EJavaSignal`. |
@@ -79,7 +79,7 @@ the TWS API handshake to the point where strategy threads are running.
    **Receiving Component:** `ReconciliationManager`
 
 7. **Initiating Component:** `Main`
-   **Method Invocation:** `new EWrapperRaptor(registry, IntradayWilderAtrTracker, DailyWilderAtrCalculator, IbkrErrorHandler, AccountEventHandler, SimpleMovingAverageTracker, NextValidIdHandler, OrderLifecycleHandler, RsiTracker, MinuteBarHandler, PriceTickHandler, SizeTickHandler, BrokerTimeHandler, MinuteVolumeTracker)`
+   **Method Invocation:** `new EWrapperRaptor(registry, IntradayWilderAtrTracker, DailyWilderAtrCalculator, IbkrErrorHandler, AccountEventHandler, SimpleMovingAverageTracker, NextValidIdHandler, OrderLifecycleHandler, RsiTracker, MinuteBarHandler, PriceTickHandler, SizeTickHandler, BrokerTimeHandler, MinuteVolumeTracker, DailyVwapTracker)`
    **Receiving Component:** `EWrapperRaptor`
 
 8. **Initiating Component:** `Main`

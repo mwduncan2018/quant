@@ -57,12 +57,14 @@ public class PriceTickHandler {
             stock.setDailyHigh(price);
         } else if (tickMap.isLow(field)) {
             stock.setDailyLow(price);
-        } else if (tickMap.isVwap(field)) {
-            stock.setDailyVWAP(price);
-            inputStore.record(ticker, MarketDataInput.DAILY_VWAP);
         }
+        // VWAP is deliberately absent here. IBKR sends no VWAP price tick: the
+        // figure travels inside RT_VOLUME (tick 48, a string tick) and has no
+        // delayed equivalent at all. DailyVwapTracker derives it from the minute
+        // bars instead, which works identically on live and delayed data.
     }
-    
+
+
 	public void onTickByTickBidAsk(int reqId, double bidPrice, double askPrice) {
 		String ticker = registry.getTickerFor(reqId);
 		

@@ -195,7 +195,8 @@ Open-position management contains break-even adjustments, a VWAP target adjustme
 
 | Input | Current source | Readiness |
 | --- | --- | --- |
-| Bid, ask, last, mark, OHLC, previous close, VWAP | IBKR market-data ticks | Wired |
+| Bid, ask, last, mark, OHLC, previous close | IBKR market-data ticks | Wired |
+| Session VWAP | Derived from the minute bars by `DailyVwapTracker` | Wired |
 | Daily history and simple moving averages | IBKR historical data | Wired |
 | Updating one-minute bars, ATR, RSI, and the minute-volume baseline | IBKR updating historical data | Wired |
 | Account values and margin rates | IBKR account callbacks and what-if orders | Wired |
@@ -225,6 +226,23 @@ The previous close is session-scoped because IBKR sends it once when the
 subscription opens and effectively never again; an age limit would discard a
 value that stays correct all day. It lapses when the New York date changes or
 when subscriptions are rebuilt.
+
+`DAILY_VWAP` is the one input the engine computes rather than receives. **IBKR
+sends no VWAP price tick.** The figure travels inside `RT_VOLUME` (tick type 48),
+a *string* tick enabled by generic tick `233`, and the delayed field family — 66
+`DELAYED_BID` through 76 `DELAYED_OPEN` — contains no equivalent at all, so a
+delayed subscription can never carry it. `DailyVwapTracker` therefore derives the
+session figure from the minute bars the engine already receives:
+
+```
+VWAP = Sum(bar.wap * bar.volume) / Sum(bar.volume)
+```
+
+That works identically on live and delayed data, which is what allows the PAPER
+engine to run on delayed market data. The forming minute is included and replaced
+as it updates, so the value tracks intrabar rather than freezing for up to a
+minute. It will not match the TWS display to the cent — TWS applies its own
+trade-condition filtering — but it follows the same curve.
 
 Only handlers record inputs, and only after accepting a value, so a ready input
 carries a real guarantee: a validated number reached the `Blackboard`. The

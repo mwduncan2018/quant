@@ -269,7 +269,7 @@ Both public methods delegate to `updateLastMinuteBar`.
 
 ### 1. Class/Interface Responsibilities
 
-Routes IBKR price ticks and tick-by-tick price callbacks to the matching `Stock` setter using `TickMap` field resolution, and records `LAST_PRICE`, `PREVIOUS_CLOSE`, and `DAILY_VWAP` in `MarketDataInputStore`.
+Routes IBKR price ticks and tick-by-tick price callbacks to the matching `Stock` setter using `TickMap` field resolution, and records `LAST_PRICE` and `PREVIOUS_CLOSE` in `MarketDataInputStore`. `DAILY_VWAP` is recorded by `mwd.trading.indicator.DailyVwapTracker`, not here.
 
 ### 2. Injected Dependencies
 
@@ -302,7 +302,7 @@ Holds none.
 
 | Method | Interaction |
 | --- | --- |
-| `onTickPrice(int, int, double, TickAttrib)` | Reads `registry.getTickerFor(int)` and `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow/isVwap(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk`, `setLastPrice`, `setMarkPrice`, `setOpen`, `setPreviousClose`, `setDailyHigh`, `setDailyLow`, `setDailyVWAP`; mutates `inputStore.record(...)` for `LAST_PRICE`, `PREVIOUS_CLOSE`, `DAILY_VWAP` |
+| `onTickPrice(int, int, double, TickAttrib)` | Reads `registry.getTickerFor(int)` and `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk`, `setLastPrice`, `setMarkPrice`, `setOpen`, `setPreviousClose`, `setDailyHigh`, `setDailyLow`; mutates `inputStore.record(...)` for `LAST_PRICE` and `PREVIOUS_CLOSE` |
 | `onTickByTickBidAsk(int, double, double)` | Reads `registry.getTickerFor(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk` |
 | `onTickByTickAllLast(int, double)` | Reads `registry.getTickerFor(int)`; mutates `stock.setLastPrice(double)` and `inputStore.record(ticker, MarketDataInput.LAST_PRICE)` |
 

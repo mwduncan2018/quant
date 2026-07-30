@@ -56,6 +56,7 @@ import mwd.trading.marketdata.MinuteBarHandler;
 import mwd.trading.marketdata.PriceTickHandler;
 import mwd.trading.marketdata.SizeTickHandler;
 import mwd.trading.broker.ibkr.callback.BrokerTimeHandler;
+import mwd.trading.indicator.DailyVwapTracker;
 import mwd.trading.indicator.MinuteVolumeTracker;
 import mwd.trading.reconciliation.BrokerState;
 import mwd.trading.reconciliation.ReconciliationManager;
@@ -140,7 +141,8 @@ public class Main {
                 new PriceTickHandler(blackboard, registry, tickMap, marketDataInputStore),
                 new SizeTickHandler(blackboard, registry, tickMap),
                 new BrokerTimeHandler(blackboard),
-                new MinuteVolumeTracker(blackboard, registry, marketDataInputStore));
+                new MinuteVolumeTracker(blackboard, registry, marketDataInputStore),
+                new DailyVwapTracker(blackboard, registry, marketDataInputStore));
 
         IbkrSessionManager sessionManager = new IbkrSessionManager(
                 wrapper, config, tradingGate, reconciliationManager);

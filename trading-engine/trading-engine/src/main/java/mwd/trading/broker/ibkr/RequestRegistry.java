@@ -20,7 +20,8 @@ public class RequestRegistry {
     	TICK_BAR,
     	TICK_PRICE,
     	TICK_SIZE,
-    	VOLUME
+    	VOLUME,
+    	VWAP
     }
     private static record ReqData(String ticker, EnumSet<DataConsumer> consumers) {}
 
