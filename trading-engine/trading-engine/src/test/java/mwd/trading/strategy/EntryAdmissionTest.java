@@ -8,12 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Set;
 
+import com.ib.client.Decimal;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import mwd.trading.broker.ibkr.IdManager;
 import mwd.trading.broker.ibkr.TimeManager;
 import mwd.trading.domain.Stock;
+import mwd.trading.execution.BracketOrder;
 import mwd.trading.execution.OrderRegistry;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -47,7 +50,12 @@ class EntryAdmissionTest {
     }
 
     private Stock.PositionState state() {
-        return stock.getState().get();
+        return state(stock);
+    }
+
+    private Stock.PositionState state(Stock subject) {
+        return subject.positionState(
+                blackboard.getPositionOwner(subject.getTicker()) != null);
     }
 
     @Test
@@ -67,7 +75,7 @@ class EntryAdmissionTest {
         Stock other = blackboard.getStock("MSFT");
         assertNull(admission.tryAdmit(OTHER_STRATEGY, other),
                 "only one entry may be outstanding at IBKR at a time");
-        assertEquals(Stock.PositionState.FLAT, other.getState().get());
+        assertEquals(Stock.PositionState.FLAT, state(other));
         assertNull(blackboard.getPositionOwner("MSFT"));
     }
 
@@ -79,19 +87,26 @@ class EntryAdmissionTest {
         assertNull(admission.tryAdmit(STRATEGY, stock));
         assertNull(blackboard.getGlobalPendingOwner(),
                 "a failed admission must not leave the engine-wide lock held");
-        assertEquals(Stock.PositionState.FLAT, state());
+        assertEquals(OTHER_STRATEGY, blackboard.getPositionOwner(TICKER),
+                "the reservation it lost to is untouched");
     }
 
     @Test
-    void aLostStateCompareAndSetGivesBackBothHoldings() {
-        // The reader thread moved the symbol out of FLAT between the checks.
-        stock.getState().set(Stock.PositionState.OPEN);
+    void aLiveBracketOnTheTickerGivesBackBothHoldings() {
+        // The symbol is unreserved but already carries a filled bracket, so the
+        // reservation succeeds and the third check is the only thing standing
+        // between this strategy and a second position on one ticker.
+        BracketOrder bracketOrder = new BracketOrder(
+                "trade-1", OTHER_STRATEGY, "DU123456", 1, "BUY",
+                TICKER, 1, Decimal.get(10));
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
+        stock.setActiveBracket(bracketOrder);
 
         assertNull(admission.tryAdmit(STRATEGY, stock));
         assertNull(blackboard.getGlobalPendingOwner());
         assertNull(blackboard.getPositionOwner(TICKER),
                 "a failed admission must not leave the ticker reserved");
-        assertEquals(Stock.PositionState.OPEN, state(), "the state it lost to is untouched");
+        assertEquals(Stock.PositionState.OPEN, state(), "the bracket it lost to is untouched");
     }
 
     @Test

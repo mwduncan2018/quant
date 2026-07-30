@@ -13,7 +13,9 @@ Traces a new entry from the strategy poll loop through bracket construction and
 
 | Component | Role in this flow |
 | --- | --- |
-| `mwd.trading.strategy.AbstractStrategy` | `Runnable` poll loop that gates, reserves, sizes, and submits an entry, then interprets the resulting `BracketOrder.Status`. |
+| `mwd.trading.strategy.AbstractStrategy` | `Runnable` poll loop that gates, sizes, and submits an entry, then interprets the resulting `BracketOrder.Status`. |
+| `mwd.trading.strategy.EntryAdmission` | Takes and unwinds the two entry claims through `PositionLedger`, and hands back an `AutoCloseable` `Reservation`. |
+| `mwd.trading.marketdata.MarketSnapshot` | The frozen market-data view each entry decision is built from; one for screening, one taken after the lock is held. |
 | `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Concrete strategy supplying `isEntryConditionMet`, `calculateEntryPrice`, `calculateSliceIntents`, `evaluateTickStreamNeed`, `manageOpenPosition`, `getStrategyName`, `getTradeDirection`. |
 | `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Concrete strategy with the same override set, `TradeDirection.LONG`. |
 | `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Concrete strategy with the same override set, `TradeDirection.SHORT`. |
@@ -26,7 +28,7 @@ Traces a new entry from the strategy poll loop through bracket construction and
 | `mwd.trading.execution.OrderRegistry` | Four `ConcurrentHashMap`s resolving a bracket by API order ID, perm ID, order reference, or trade ID. |
 | `mwd.trading.execution.UncertainOrderSubmissionException` | Thrown when `placeOrder` fails part-way through the bundle. |
 | `mwd.trading.domain.TradeDirection` | Enum supplying `entryAction()`, `exitAction()`, and `acceptsEntryPrice(double, double)`. |
-| `mwd.trading.domain.Stock` | Holds `PositionState`, the `Contract`, and the active `BracketOrder`. |
+| `mwd.trading.domain.Stock` | Holds the `Contract` and the active `BracketOrder`, and derives `PositionState` from that bracket. |
 | `mwd.trading.state.Blackboard` | Allocates order IDs and owns the global pending-entry lock, the position-owner map, and the last-entry timestamp. |
 | `mwd.trading.state.Blackboard.EntryOwner` | Record `(String strategyName, String ticker)` held in the global pending `AtomicReference`. |
 | `mwd.trading.lifecycle.TradingGate` | Consulted by both the strategy and the executor before anything is sent. |
@@ -50,7 +52,7 @@ Traces a new entry from the strategy poll loop through bracket construction and
    **Receiving Component:** `AbstractStrategy`
 
 2. **Initiating Component:** `AbstractStrategy.executeLifecycle(Stock)`
-   **Method Invocation:** `blackboard.getPositionOwner(String)` and `stock.getState().get()`
+   **Method Invocation:** `blackboard.getPositionOwner(String)`, then `stock.positionState(owner != null)`
    **Receiving Component:** `Blackboard`, `Stock`
 
 3. **Initiating Component:** `AbstractStrategy.executeLifecycle(Stock)`
@@ -58,27 +60,27 @@ Traces a new entry from the strategy poll loop through bracket construction and
    **Receiving Component:** `AbstractStrategy`
 
 4. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** `tradingGate.allowsNewEntries()`, `stock.isTradeable()`, `blackboard.isAccountCurrentForNewEntry()`, `entryInputsReady(Stock)`, `isEntryConditionMet(Stock)`
-   **Receiving Component:** `TradingGate`, `Stock`, `Blackboard`, `MarketDataInputStore`, the concrete strategy
+   **Method Invocation:** `tradingGate.allowsNewEntries()`, `stock.isTradeable()`, `blackboard.isAccountCurrentForNewEntry()`, `entryInputsReady(Stock)`, then `snapshot(stock)` and `isEntryConditionMet(MarketSnapshot)` on that screening view
+   **Receiving Component:** `TradingGate`, `Stock`, `Blackboard`, `MarketDataInputStore`, `MarketSnapshot`, the concrete strategy
 
 5. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** `calculateEntryPrice(Stock)`, `evaluateTickStreamNeed(Stock, double)`, `tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)`
+   **Method Invocation:** `calculateEntryPrice(MarketSnapshot)`, `evaluateTickStreamNeed(MarketSnapshot, double)`, `tradeDirection().acceptsEntryPrice(screening.lastPrice(), entryPrice)`
    **Receiving Component:** the concrete strategy, `TickByTickManager`, `TradeDirection`
 
 6. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** `blackboard.tryAcquireGlobalPending(strategyId, stock.getTicker())`
+   **Method Invocation:** `entryAdmission.tryAdmit(strategyId, stock)` → `positions.tryAcquireGlobalPending(strategyId, stock.getTicker())`
    **Receiving Component:** `Blackboard` (`AtomicReference<EntryOwner>.compareAndSet`)
 
 7. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** `blackboard.tryReservePosition(stock.getTicker(), strategyId)` then `stock.getState().compareAndSet(Stock.PositionState.FLAT, Stock.PositionState.PENDING)`
+   **Method Invocation:** `positions.tryReservePosition(stock.getTicker(), strategyId)`, then the guard `stock.positionState(true) != Stock.PositionState.PENDING`, which unwinds both claims rather than writing anything
    **Receiving Component:** `Blackboard`, `Stock`
 
 8. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** re-checks `tradingGate.allowsNewEntries()`, `marketDataFreshness.areAllFresh(String, Set<MarketDataInput>)`, `isEntryConditionMet(Stock)`, then recomputes `calculateEntryPrice(Stock)` and re-tests `acceptsEntryPrice`; any failure calls `rollbackEntryReservation(Stock, String)`
+   **Method Invocation:** re-checks `tradingGate.allowsNewEntries()` and `marketDataFreshness.areAllFresh(String, Set<MarketDataInput>)`, then takes a second `snapshot(stock)` — the only view the order is built from — and re-runs `isEntryConditionMet(MarketSnapshot)`, `calculateEntryPrice(MarketSnapshot)`, and `acceptsEntryPrice(market.lastPrice(), entryPrice)`; any failure calls `rollbackEntryReservation(Stock, EntryAdmission.Reservation)`
    **Receiving Component:** `TradingGate`, `MarketDataInputStore`, the concrete strategy
 
 9. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
-   **Method Invocation:** `calculateSliceIntents(Stock, double)` then the private `totalQuantity(List<SliceIntent>)`
+   **Method Invocation:** `calculateSliceIntents(MarketSnapshot, double)` on that same view, then the private `totalQuantity(List<SliceIntent>)`
    **Receiving Component:** the concrete strategy
 
 10. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
@@ -170,11 +172,11 @@ Traces a new entry from the strategy poll loop through bracket construction and
     **Receiving Component:** `BracketOrder.ExitSlice`, `BracketOrder`, `Stock`, `Blackboard`
 
 31. **Initiating Component:** `OrderLifecycleHandler.markPositionOpen(BracketOrder, Stock)`
-    **Method Invocation:** `stock.getState().set(Stock.PositionState.OPEN)` and `blackboard.releaseGlobalPending(String, String)`
+    **Method Invocation:** `blackboard.releaseGlobalPending(String, String)`. No position state is written; `OPEN` follows from the `Status` the caller set on the bracket
     **Receiving Component:** `Stock`, `Blackboard`
 
 32. **Initiating Component:** `OrderLifecycleHandler.completeConfirmedFlat(BracketOrder)`
-    **Method Invocation:** `stock.getState().set(Stock.PositionState.FLAT)`, `stock.setActiveBracket(null)`, `blackboard.releaseGlobalPending(String, String)`, `blackboard.releasePosition(String, String)`
+    **Method Invocation:** `stock.setActiveBracket(null)` when it still points at this bracket, `blackboard.releaseGlobalPending(String, String)`, `blackboard.releasePosition(String, String)`. `FLAT` follows from the terminal `Status` and the cleared bracket
     **Receiving Component:** `Stock`, `Blackboard`
 
 33. **Initiating Component:** `EWrapperRaptor.execDetails(int reqId, Contract contract, Execution execution)`
@@ -204,11 +206,15 @@ Traces a new entry from the strategy poll loop through bracket construction and
 ### Strategy-side resolution of the pending entry (strategy thread)
 
 39. **Initiating Component:** `AbstractStrategy.executeLifecycle(Stock)`
-    **Method Invocation:** `handlePendingEntry(Stock, String)` while the state is `PENDING` and the strategy owns the ticker
+    **Method Invocation:** `acknowledgeStatusChange(Stock, String)` then `handlePendingEntry(Stock)`, while the derived state is `PENDING` and the strategy owns the ticker
     **Receiving Component:** `AbstractStrategy`
 
-40. **Initiating Component:** `AbstractStrategy.handlePendingEntry(Stock, String)`
-    **Method Invocation:** switches on `bracketOrder.getStatus()` — `INITIALIZED` → `acknowledgementTimedOut(long)` then `escalate`; `WORKING_PARENT` → `blackboard.releaseGlobalPending`; `PARTIAL_PARENT` → state `OPEN` + `escalate`; `POSITION_OPEN` → state `OPEN` and pending-entry cleanup; `CANCELLED`/`REJECTED` → `completeConfirmedFlat` or `escalate`; `FILLED` → `completeConfirmedFlat`
+40. **Initiating Component:** `AbstractStrategy.acknowledgeStatusChange(Stock, String)`
+    **Method Invocation:** returns immediately when `bracketOrder.getStatus()` equals the value recorded in `acknowledgedStatus`; otherwise records it and switches — `WORKING_PARENT` → `blackboard.releaseGlobalPending`; `PARTIAL_PARENT` → `releaseGlobalPending` + `escalate`; `POSITION_OPEN` → `releaseGlobalPending` and pending-entry cleanup; `CANCELLED`/`REJECTED` with a non-zero fill → `releaseGlobalPending` + `escalate`; `INITIALIZED` and `FILLED` carry no once-only work
+    **Receiving Component:** `BracketOrder`, `Blackboard`, `TradingGate`
+
+40a. **Initiating Component:** `AbstractStrategy.handlePendingEntry(Stock)`
+    **Method Invocation:** the clock-driven half only — returns unless `pendingEntry == null || acknowledgementTimedOut(...)`, then escalates for a missing bracket or a still-`INITIALIZED` one. A clean terminal derives `FLAT` and is cleaned up through `handleFlatWithLocalOwnership` on the same cycle
     **Receiving Component:** `BracketOrder`, `Stock`, `Blackboard`, `TradingGate`
 
 41. **Initiating Component:** `AbstractStrategy.cleanupOwnedLifecycle(Stock, String, BracketOrder)`
@@ -219,7 +225,7 @@ Traces a new entry from the strategy poll loop through bracket construction and
 
 ### Objects passed
 
-- `List<BracketOrderExecutor.SliceIntent>` — built by `calculateSliceIntents(Stock, double)` on the strategy thread and handed to `placeTripleThreat`; each intent's fields are copied into a `BracketOrder.ExitSlice` and into the corresponding `com.ib.client.Order`.
+- `List<BracketOrderExecutor.SliceIntent>` — built by `calculateSliceIntents(MarketSnapshot, double)` on the strategy thread and handed to `placeTripleThreat`; each intent's fields are copied into a `BracketOrder.ExitSlice` and into the corresponding `com.ib.client.Order`.
 - `Decimal totalOrderQuantity` — summed from the slice intents by the strategy and re-validated by `validateEntryIntent` to equal the sum of slice quantities.
 - `TradeDirection` — supplies `entryAction()` for the parent order and `exitAction()` for all three exit legs.
 - `BracketOrder` — created inside the executor, registered in `OrderRegistry`, installed on `Stock.setActiveBracket`, returned to the strategy, and thereafter mutated by `OrderLifecycleHandler` on the reader thread.
@@ -235,8 +241,8 @@ Traces a new entry from the strategy poll loop through bracket construction and
 | --- | --- |
 | Strategy thread → TWS | `BracketOrderExecutor.placeTripleThreat` runs entirely on `<Strategy>-Thread` and ends in `EClientSocket.placeOrder`, which writes to the socket. |
 | TWS → `IBKR-Reader` thread | Every acknowledgement (`openOrder`, `orderStatus`, `execDetails`, `completedOrder`, `orderBound`, `error`) is dispatched by `EReader.processMsgs()` and handled inline by `OrderLifecycleHandler`. |
-| `IBKR-Reader` → strategy thread | The reader thread mutates `BracketOrder.status`, `Stock.state`, and the `Blackboard` ownership maps; the strategy thread observes them on its next poll in `handlePendingEntry` / `executeLifecycle`. |
-| Strategy thread ↔ `IBKR-Reader` on the pending lock | `Blackboard.tryAcquireGlobalPending` is called on the strategy thread; `releaseGlobalPending` is called from **both** the strategy thread (`WORKING_PARENT` branch) and the reader thread (`markPositionOpen` / `completeConfirmedFlat`), guarded by `AtomicReference.compareAndSet` on `EntryOwner`. |
+| `IBKR-Reader` → strategy thread | The reader thread mutates `BracketOrder.status` (`volatile`) and the `Blackboard` ownership maps; the strategy thread derives `Stock.PositionState` from them on its next poll in `executeLifecycle`, and `acknowledgedStatus` makes each status observable exactly once in `acknowledgeStatusChange`. |
+| Strategy thread ↔ `IBKR-Reader` on the pending lock | `tryAcquireGlobalPending` is called on the strategy thread through `EntryAdmission`; `releaseGlobalPending` is called from **both** the strategy thread (`acknowledgeStatusChange`, `cleanupOwnedLifecycle`, `Reservation.release()`) and the reader thread (`markPositionOpen` / `completeConfirmedFlat`), guarded by `AtomicReference.compareAndSet` on `EntryOwner`. |
 | Strategy thread ↔ `IBKR-Reader` on position ownership | `Blackboard.tryReservePosition` / `releasePosition` / `getPositionOwner` are `synchronized` on the `Blackboard` instance and are called from both threads. |
 | Both threads → journal | `JsonTradingStateStore.recordIntent` (strategy thread) and `recordBrokerUpdate` (reader thread) are `synchronized` and each performs a temp-file write, backup copy, and `ATOMIC_MOVE`. |
 | Reader thread → `IBKR-Session-Lifecycle` | `error` codes handled by `IbkrSessionManager.onError` may re-post work to the lifecycle executor. |

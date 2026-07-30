@@ -29,6 +29,7 @@ import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketDataInputStore;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -119,11 +120,20 @@ class MarketDataReadinessGatingTest {
         return blackboard.getStock(TICKER);
     }
 
+    /**
+     * The values as one decision sees them. A strategy reads a snapshot now, so a
+     * test that mutates the stock and then calls a hook must take the snapshot
+     * after the mutation - the same ordering the engine has.
+     */
+    private MarketSnapshot market() {
+        return MarketSnapshot.of(stock(), NOW.toEpochMilli());
+    }
+
     @Test
     void everyRecordedInputAllowsEntry() {
         recordAllInputs();
 
-        assertTrue(strategy.isEntryConditionMet(stock()));
+        assertTrue(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -137,7 +147,7 @@ class MarketDataReadinessGatingTest {
             inputStore.record(TICKER, input);
         }
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -158,11 +168,11 @@ class MarketDataReadinessGatingTest {
     @Test
     void aResubscribeRevokesReadinessUntilEachInputArrivesAgain() {
         recordAllInputs();
-        assertTrue(strategy.isEntryConditionMet(stock()));
+        assertTrue(strategy.isEntryConditionMet(market()));
 
         inputStore.markAllStale();
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -235,8 +245,8 @@ class MarketDataReadinessGatingTest {
             slice.setStopLossPrice(95.0);
             slice.setTakeProfitPrice(98.0);
         }
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
         stock.setActiveBracket(bracketOrder);
-        stock.getState().set(Stock.PositionState.OPEN);
         blackboard.tryReservePosition(TICKER, TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID);
         return bracketOrder;
     }

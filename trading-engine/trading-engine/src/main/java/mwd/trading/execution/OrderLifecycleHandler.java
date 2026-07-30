@@ -123,13 +123,13 @@ public class OrderLifecycleHandler {
             if ("Filled".equalsIgnoreCase(status)) {
                 bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
                 Stock stock = blackboard.getStock(bracketOrder.getTicker());
-                markPositionOpen(bracketOrder, stock);
+                markPositionOpen(bracketOrder);
             } else if (filledQuantity != null
                     && !filledQuantity.isZero()
                     && !isCancelledOrInactive(status)) {
                 bracketOrder.setStatus(BracketOrder.Status.PARTIAL_PARENT);
                 Stock stock = blackboard.getStock(bracketOrder.getTicker());
-                markPositionOpen(bracketOrder, stock);
+                markPositionOpen(bracketOrder);
                 halt("[" + bracketOrder.getTicker()
                         + "] Parent order is partially filled; verify the live position and exits");
             } else if (isWorkingStatus(status)) {
@@ -157,8 +157,7 @@ public class OrderLifecycleHandler {
                 completeConfirmedFlat(bracketOrder);
             } else {
                 bracketOrder.setStatus(BracketOrder.Status.PARTIAL_PARENT);
-                markPositionOpen(
-                        bracketOrder, blackboard.getStock(bracketOrder.getTicker()));
+                markPositionOpen(bracketOrder);
                 halt("[" + bracketOrder.getTicker()
                         + "] Parent order stopped after a partial fill; verify the live position and exits");
             }
@@ -185,11 +184,11 @@ public class OrderLifecycleHandler {
                         completeConfirmedFlat(bracketOrder);
                     } else {
                         bracketOrder.setStatus(BracketOrder.Status.PARTIAL_PARENT);
-                        markPositionOpen(bracketOrder, blackboard.getStock(ticker));
+                        markPositionOpen(bracketOrder);
                     }
                 } else {
                     bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
-                    markPositionOpen(bracketOrder, blackboard.getStock(ticker));
+                    markPositionOpen(bracketOrder);
                 }
                 halt("[" + ticker + "] Critical order error " + errorCode + ": " + errorMessage);
             }
@@ -200,7 +199,7 @@ public class OrderLifecycleHandler {
                     completeConfirmedFlat(bracketOrder);
                 } else if (bracketOrder.isParentOrderId(identifier)) {
                     bracketOrder.setStatus(BracketOrder.Status.PARTIAL_PARENT);
-                    markPositionOpen(bracketOrder, blackboard.getStock(ticker));
+                    markPositionOpen(bracketOrder);
                     halt("[" + ticker
                             + "] Parent cancellation followed a partial fill; verify the live position and exits");
                 }
@@ -234,8 +233,7 @@ public class OrderLifecycleHandler {
                     halt("[" + bracketOrder.getTicker()
                             + "] Execution reported a partial parent fill; verify protective exits");
                 }
-                markPositionOpen(
-                        bracketOrder, blackboard.getStock(bracketOrder.getTicker()));
+                markPositionOpen(bracketOrder);
             }
             persist(bracketOrder);
         }
@@ -260,8 +258,7 @@ public class OrderLifecycleHandler {
             if (bracketOrder.isParentOrderId(order.orderId())) {
                 if ("Filled".equalsIgnoreCase(completedStatus)) {
                     bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
-                    markPositionOpen(
-                            bracketOrder, blackboard.getStock(bracketOrder.getTicker()));
+                    markPositionOpen(bracketOrder);
                 } else if (isCancelledOrInactive(completedStatus)
                         || "Rejected".equalsIgnoreCase(completedStatus)) {
                     if (bracketOrder.getFilledQuantity() == null
@@ -273,8 +270,7 @@ public class OrderLifecycleHandler {
                         completeConfirmedFlat(bracketOrder);
                     } else {
                         bracketOrder.setStatus(BracketOrder.Status.PARTIAL_PARENT);
-                        markPositionOpen(
-                                bracketOrder, blackboard.getStock(bracketOrder.getTicker()));
+                        markPositionOpen(bracketOrder);
                         halt("[" + bracketOrder.getTicker()
                                 + "] Completed parent retained a partial fill; verify the position");
                     }
@@ -408,15 +404,18 @@ public class OrderLifecycleHandler {
         return bracketOrder;
     }
 
-    private void markPositionOpen(BracketOrder bracketOrder, Stock stock) {
-        stock.getState().set(Stock.PositionState.OPEN);
+    /**
+     * Releases the engine-wide entry lock now that the parent is filled. It writes
+     * no position state: OPEN is derived from the {@code Status} the caller set on
+     * the bracket, so there is nothing here that could disagree with it.
+     */
+    private void markPositionOpen(BracketOrder bracketOrder) {
         blackboard.releaseGlobalPending(
                 bracketOrder.getStrategyName(), bracketOrder.getTicker());
     }
 
     private void completeConfirmedFlat(BracketOrder bracketOrder) {
         Stock stock = blackboard.getStock(bracketOrder.getTicker());
-        stock.getState().set(Stock.PositionState.FLAT);
         if (stock.getActiveBracket() == bracketOrder) {
             stock.setActiveBracket(null);
         }

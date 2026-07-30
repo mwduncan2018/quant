@@ -36,6 +36,7 @@ import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketDataInputStore;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -132,6 +133,15 @@ class TwoSigmaDownsidePolicyTest {
         return blackboard.getStock(TICKER);
     }
 
+    /**
+     * The values as one decision sees them. A strategy reads a snapshot now, so a
+     * test that mutates the stock and then calls a hook must take the snapshot
+     * after the mutation - the same ordering the engine has.
+     */
+    private MarketSnapshot market() {
+        return MarketSnapshot.of(stock(), MID_MORNING.toEpochMilli());
+    }
+
     /** Earnings far enough away that the blackout plays no part. */
     private static EarningsStore earningsFarOff() {
         return earningsOn(TICKER, MONDAY, LocalDate.of(2026, 8, 20));
@@ -144,19 +154,19 @@ class TwoSigmaDownsidePolicyTest {
     @Test
     void aReportSeveralWeeksOutDoesNotBlockEntry() {
         assertTrue(strategy(MID_MORNING, standardSession(MONDAY), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void theReportDayItselfIsBlacked() {
         assertFalse(strategy(MID_MORNING, standardSession(MONDAY),
-                earningsOn(TICKER, MONDAY, MONDAY)).isEntryConditionMet(stock()));
+                earningsOn(TICKER, MONDAY, MONDAY)).isEntryConditionMet(market()));
     }
 
     @Test
     void theMarketDayBeforeTheReportIsBlacked() {
         assertFalse(strategy(MID_MORNING, standardSession(MONDAY),
-                earningsOn(TICKER, MONDAY, TUESDAY)).isEntryConditionMet(stock()));
+                earningsOn(TICKER, MONDAY, TUESDAY)).isEntryConditionMet(market()));
     }
 
     @Test
@@ -166,7 +176,7 @@ class TwoSigmaDownsidePolicyTest {
         // from the proxy's retained history, because a ticker that reported on
         // Friday may already show next quarter as its upcoming date.
         assertFalse(strategy(MID_MORNING, standardSession(MONDAY),
-                earningsLastOn(TICKER, MONDAY, FRIDAY)).isEntryConditionMet(stock()));
+                earningsLastOn(TICKER, MONDAY, FRIDAY)).isEntryConditionMet(market()));
     }
 
     @Test
@@ -176,7 +186,7 @@ class TwoSigmaDownsidePolicyTest {
         // market day after the report.
         assertFalse(strategy(MID_MORNING, standardSession(MONDAY),
                 earningsDates(TICKER, MONDAY, LocalDate.of(2026, 10, 29), FRIDAY))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -186,7 +196,7 @@ class TwoSigmaDownsidePolicyTest {
         assertTrue(strategy(MID_MORNING, standardSession(MONDAY),
                 earningsDates(TICKER, MONDAY, LocalDate.of(2026, 10, 29),
                         LocalDate.of(2026, 7, 13)))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -195,7 +205,7 @@ class TwoSigmaDownsidePolicyTest {
         // is known. That is knowledge, not absence, and must not fail closed.
         assertTrue(strategy(MID_MORNING, standardSession(MONDAY),
                 earningsLastOn(TICKER, MONDAY, LocalDate.of(2026, 7, 13)))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -204,14 +214,14 @@ class TwoSigmaDownsidePolicyTest {
         // neither the previous nor the next session and does not black out.
         assertTrue(strategy(MID_MORNING, standardSession(MONDAY),
                 earningsOn(TICKER, MONDAY, LocalDate.of(2026, 7, 25)))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void twoMarketDaysOutIsOutsideTheWindow() {
         assertTrue(strategy(MID_MORNING, standardSession(MONDAY),
                 earningsOn(TICKER, MONDAY, LocalDate.of(2026, 7, 29)))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -220,7 +230,7 @@ class TwoSigmaDownsidePolicyTest {
         EarningsStore empty = new EarningsStore(Set.of(TICKER));
 
         assertFalse(strategy(MID_MORNING, standardSession(MONDAY), empty)
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -233,7 +243,7 @@ class TwoSigmaDownsidePolicyTest {
 
         assertFalse(strategy(MID_MORNING, calendar,
                 earningsOn(TICKER, MONDAY, LocalDate.of(2026, 7, 29)))
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     // ----------------------------------------------------------------
@@ -244,15 +254,15 @@ class TwoSigmaDownsidePolicyTest {
     void entryIsAllowedMoreThanAnHourBeforeClose() {
         // 14:59 against a 16:00 close: 61 minutes remain.
         assertTrue(strategy(newYork(MONDAY, 14, 59), standardSession(MONDAY), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void entryIsBlockedInsideTheLastHour() {
         assertFalse(strategy(newYork(MONDAY, 15, 0), standardSession(MONDAY), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
         assertFalse(strategy(newYork(MONDAY, 15, 30), standardSession(MONDAY), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -260,15 +270,15 @@ class TwoSigmaDownsidePolicyTest {
         // The bug this replaces: 12:30 was a valid entry time under a hardcoded
         // 15:00 cutoff, half an hour before a 13:00 close.
         assertFalse(strategy(newYork(MONDAY, 12, 30), earlyCloseSession(MONDAY), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
         assertTrue(strategy(newYork(MONDAY, 11, 30), earlyCloseSession(MONDAY), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
     void anUnknownCloseBlocksEntry() {
         assertFalse(strategy(MID_MORNING, new MarketCalendarStore(), earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -279,7 +289,7 @@ class TwoSigmaDownsidePolicyTest {
                 MONDAY);
 
         assertFalse(strategy(MID_MORNING, closed, earningsFarOff())
-                .isEntryConditionMet(stock()));
+                .isEntryConditionMet(market()));
     }
 
     @Test
@@ -306,7 +316,7 @@ class TwoSigmaDownsidePolicyTest {
                 strategy(MID_MORNING, earlyCloseSession(MONDAY), earningsFarOff());
 
         List<BracketOrderExecutor.SliceIntent> intents =
-                built.calculateSliceIntents(stock(), 96.0);
+                built.calculateSliceIntents(market(), 96.0);
 
         assertFalse(intents.isEmpty());
         for (BracketOrderExecutor.SliceIntent intent : intents) {

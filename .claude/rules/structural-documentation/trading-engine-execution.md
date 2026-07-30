@@ -326,8 +326,8 @@ Holds none. Every lookup and identity write goes through the `ConcurrentHashMap`
 | `onOrderBound(...)` | Mutates `blackboard.getOrderRegistry().recordBrokerIdentity(...)` |
 | `onCommissionAndFeesReport(CommissionAndFeesReport)` | No state interaction; empty body with a comment |
 | `processWhatIf(...)` | Reads `blackboard.getStock(symbol)`; mutates `stock.setLongMarginRate`/`setLongMarginRateVerified` or `setShortMarginRate`/`setShortMarginRateVerified`. Returns without writing when `parseMarginChange` yields `NaN`, leaving the rate at its 1.0 default and the direction unverified |
-| `markPositionOpen(BracketOrder, Stock)` | Mutates `stock.getState().set(PositionState.OPEN)` (the `AtomicReference` in `Stock`) and `blackboard.releaseGlobalPending(String, String)` |
-| `completeConfirmedFlat(BracketOrder)` | Reads `blackboard.getStock(String)`; mutates `stock.getState().set(PositionState.FLAT)`, `stock.setActiveBracket(null)`, `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)` |
+| `markPositionOpen(BracketOrder, Stock)` | Mutates `blackboard.releaseGlobalPending(String, String)`. It writes no position state: the `OPEN` reading follows from the `Status` the caller set on the bracket |
+| `completeConfirmedFlat(BracketOrder)` | Reads `blackboard.getStock(String)`; mutates `stock.setActiveBracket(null)` when it still points at this bracket, `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)`. The `FLAT` reading follows from the terminal `Status` and the cleared bracket |
 | `persist(BracketOrder)` | Calls `stateStore.recordBrokerUpdate(BracketOrder, String)` |
 | `halt(String)` | Mutates `blackboard.setSystemHalted(true)` and `tradingGate.requireManualIntervention(String)` |
 

@@ -2,7 +2,7 @@ package mwd.trading.indicator;
 
 import com.ib.client.Bar;
 import mwd.trading.broker.ibkr.RequestRegistry;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -14,13 +14,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class RsiTracker {
 	private static final Logger logger = LogManager.getLogger(RsiTracker.class);
-	private final Blackboard blackboard;
+	private final StockLookup stocks;
 	private final RequestRegistry registry;
 	private final Map<Integer, List<Bar>> historyBuffer = new ConcurrentHashMap<>();
 	private final int period = 14;
 
-	public RsiTracker(Blackboard blackboard, RequestRegistry registry) {
-		this.blackboard = blackboard;
+	public RsiTracker(StockLookup stocks, RequestRegistry registry) {
+		this.stocks = stocks;
 		this.registry = registry;
 	}
 
@@ -61,7 +61,7 @@ public class RsiTracker {
 		String ticker = registry.getTickerFor(requestId);
 		if (ticker != null) {
 			double currentRSI = calculateRSI(bars);
-			blackboard.getStock(ticker).setRSI(currentRSI);
+			stocks.getStock(ticker).setRSI(currentRSI);
 		}
 	}
 

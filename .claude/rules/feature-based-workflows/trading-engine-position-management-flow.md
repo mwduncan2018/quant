@@ -5,7 +5,7 @@ paths:
 
 # Open-Position Management and Exit-Modification Flow
 
-Traces the path taken once a `Stock` reaches `PositionState.OPEN`: the strategy
+Traces the path taken once a `Stock` derives `PositionState.OPEN`: the strategy
 reprices its `ExitSlice` values, `BracketOrderExecutor` re-transmits only the
 changed legs, and the broker callbacks fold the result back into `BracketOrder`.
 
@@ -14,15 +14,16 @@ changed legs, and the broker callbacks fold the result back into `BracketOrder`.
 | Component | Role in this flow |
 | --- | --- |
 | `mwd.trading.strategy.AbstractStrategy` | Gates management on state, ownership, and management-input freshness, then calls `updateExits(...)`. |
-| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Overrides `manageOpenPosition(Stock)` with a two-slice ripcord / break-even / VWAP-step routine. |
-| `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Overrides `manageOpenPosition(Stock)` and calls `updateExits` with the current VWAP as the take-profit. |
-| `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Overrides `manageOpenPosition(Stock)` and calls `updateExits` with the current VWAP as the take-profit. |
+| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Overrides `manageOpenPosition(Stock, MarketSnapshot)` with a two-slice ripcord / break-even / VWAP-step routine. |
+| `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Overrides `manageOpenPosition(Stock, MarketSnapshot)` and calls `updateExits` with the current VWAP as the take-profit. |
+| `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Overrides `manageOpenPosition(Stock, MarketSnapshot)` and calls `updateExits` with the current VWAP as the take-profit. |
 | `mwd.trading.execution.BracketOrderGateway` | Declares `updateTripleThreatExits(Stock, BracketOrder, BracketOrder.ExitSlice, double, double, long)`. |
 | `mwd.trading.execution.BracketOrderExecutor` | Compares requested values against the slice, builds only the changed `Order` legs, and re-sends them. |
 | `mwd.trading.execution.BracketOrder` | Supplies `getSlices()`, `getEntryPrice()`, `getUpdateCount()`, `getAccount()`, `getParentOrderId()`, `getLegStates()`, `incrementUpdateCount()`. |
 | `mwd.trading.execution.BracketOrder.ExitSlice` | Holds and receives the current take-profit price, stop-loss price, time exit, `isFilled` flag, and `lastModificationTime`. |
 | `mwd.trading.execution.BracketOrder.OrderLegState` | Supplies the stored `orderReference` that `orderReferenceFor(BracketOrder, int)` re-attaches to a modification. |
-| `mwd.trading.domain.Stock` | Supplies `getState()`, `getActiveBracket()`, `getPositionSize()`, `getLastPrice()`, `getDailyVWAP()`, `getPreviousClose()`, `getContract()`. |
+| `mwd.trading.domain.Stock` | Supplies `positionState(boolean)`, `getActiveBracket()`, `getPositionSize()`, `getContract()`. The price figures now reach the strategy through `MarketSnapshot`. |
+| `mwd.trading.marketdata.MarketSnapshot` | Supplies `lastPrice()`, `dailyVWAP()`, `previousClose()`, taken once per management cycle in `executeLifecycle`. |
 | `mwd.trading.state.Blackboard` | Answers `isPositionOwnedBy(String, String)` and receives `setSystemHalted(boolean)` on a halt. |
 | `mwd.trading.lifecycle.TradingGate` | Answers `allowsAutomatedOrderChanges()` in both the strategy and the executor. |
 | `mwd.trading.marketdata.MarketDataFreshness` | Answers `describeUnready(String, Set<MarketDataInput>)` for the narrower management input set. |
@@ -35,7 +36,7 @@ changed legs, and the broker callbacks fold the result back into `BracketOrder`.
 ## 2. Execution Path
 
 1. **Initiating Component:** `AbstractStrategy.executeLifecycle(Stock)`
-   **Method Invocation:** on `Stock.PositionState.OPEN`, verifies `strategyId.equals(blackboard.getPositionOwner(ticker))` then calls `automatedOrderChangesAllowed(Stock)`
+   **Method Invocation:** on a derived `Stock.PositionState.OPEN`, verifies `strategyId.equals(blackboard.getPositionOwner(ticker))`, runs `acknowledgeStatusChange(Stock, String)`, then calls `automatedOrderChangesAllowed(Stock)`
    **Receiving Component:** `Blackboard`, `AbstractStrategy`
 
 2. **Initiating Component:** `AbstractStrategy.automatedOrderChangesAllowed(Stock)`
@@ -43,23 +44,23 @@ changed legs, and the broker callbacks fold the result back into `BracketOrder`.
    **Receiving Component:** `TradingGate`, `MarketDataInputStore`
 
 3. **Initiating Component:** `AbstractStrategy.executeLifecycle(Stock)`
-   **Method Invocation:** `manageOpenPosition(Stock)`
+   **Method Invocation:** `manageOpenPosition(Stock, snapshot(stock))`
    **Receiving Component:** the concrete strategy
 
-4. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock)`
-   **Method Invocation:** `stock.getActiveBracket()`, `bracketOrder.getSlices()`, `stock.getLastPrice()`, `stock.getDailyVWAP()`, `bracketOrder.getEntryPrice()`, `slice.getStopLossPrice()`, `slice.getTakeProfitPrice()`, `slice.isFilled()`
+4. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock, MarketSnapshot)`
+   **Method Invocation:** `stock.getActiveBracket()`, `bracketOrder.getSlices()`, `market.lastPrice()`, `market.dailyVWAP()`, `bracketOrder.getEntryPrice()`, `slice.getStopLossPrice()`, `slice.getTakeProfitPrice()`, `slice.isFilled()`
    **Receiving Component:** `Stock`, `BracketOrder`, `BracketOrder.ExitSlice`
 
-5. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock)`
-   **Method Invocation:** `optionsIndicatorStore.lastKnownImpliedMove(stock.getTicker())`; an empty `OptionalDouble` returns without touching the resting exits
+5. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock, MarketSnapshot)`
+   **Method Invocation:** `optionsIndicatorStore.lastKnownImpliedMove(market.ticker())`; an empty `OptionalDouble` returns without touching the resting exits
    **Receiving Component:** `OptionsIndicatorStore`
 
-6. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock)`
+6. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock, MarketSnapshot)`
    **Method Invocation:** `updateExits(Stock stock, BracketOrder bracketOrder, BracketOrder.ExitSlice exitSlice, double takeProfitPrice, double stopLossPrice, long timeExitValue)`
    **Receiving Component:** `AbstractStrategy`
 
 7. **Initiating Component:** `AbstractStrategy.updateExits(...)`
-   **Method Invocation:** re-checks `stock.getState().get() == Stock.PositionState.OPEN`, `blackboard.isPositionOwnedBy(ticker, strategyId())`, `automatedOrderChangesAllowed(Stock)`
+   **Method Invocation:** re-checks `stock.positionState(true) == Stock.PositionState.OPEN`, `blackboard.isPositionOwnedBy(ticker, strategyId())`, `automatedOrderChangesAllowed(Stock)`
    **Receiving Component:** `Stock`, `Blackboard`, `TradingGate`, `MarketDataInputStore`
 
 8. **Initiating Component:** `AbstractStrategy.updateExits(...)`
@@ -94,7 +95,7 @@ changed legs, and the broker callbacks fold the result back into `BracketOrder`.
     **Method Invocation:** on `RuntimeException`, `halt(String)` then rethrow
     **Receiving Component:** `Blackboard.setSystemHalted(true)`, `TradingGate.requireManualIntervention(String)`
 
-16. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock)` (two-slice variant)
+16. **Initiating Component:** the concrete strategy's `manageOpenPosition(Stock, MarketSnapshot)` (two-slice variant)
     **Method Invocation:** `sliceB.setLastModificationTime(System.currentTimeMillis())` after a successful VWAP-step update
     **Receiving Component:** `BracketOrder.ExitSlice`
 
@@ -134,5 +135,5 @@ changed legs, and the broker callbacks fold the result back into `BracketOrder`.
 | `<Strategy>-Thread` writes slice state | `ExitSlice.setStopLossPrice/setTakeProfitPrice/setTimeExit` are written by the executor on the strategy thread. |
 | `IBKR-Reader` reads slice state | `OrderLifecycleHandler.validateExitSlice` reads the same `ExitSlice` fields on the reader thread to compare them against the broker echo. |
 | `IBKR-Reader` writes slice state | `ExitSlice.setFilled(true)` is written by `onOrderStatus` and `onCompletedOrder` on the reader thread and read by `manageOpenPosition` on the strategy thread. |
-| `IBKR-Reader` → `<Strategy>-Thread` | A completed bracket set to `FILLED` plus `Stock.state` set to `FLAT` by `completeConfirmedFlat` is observed by the strategy on its next poll, which then runs `handleFlatWithLocalOwnership` / `cleanupOwnedLifecycle`. |
+| `IBKR-Reader` → `<Strategy>-Thread` | A completed bracket set to `FILLED`, with `completeConfirmedFlat` clearing the active bracket, derives `FLAT` on the strategy's next poll, which then runs `handleFlatWithLocalOwnership` / `cleanupOwnedLifecycle`. |
 | Either thread → journal | `JsonTradingStateStore` is `synchronized`; the strategy thread reaches it only through the entry path, the reader thread through `persist`. |

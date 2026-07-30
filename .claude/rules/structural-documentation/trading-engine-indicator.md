@@ -5,6 +5,10 @@ paths:
 
 # Package `mwd.trading.indicator`
 
+> Every class here is injected with `mwd.trading.state.StockLookup`, not `Blackboard`.
+> `getStock(String)` is their entire dependency on shared state, and `Blackboard`
+> implements the interface, so `Main` passes the same instance it always did.
+
 Sources:
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/DailyWilderAtrCalculator.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/indicator/IntradayWilderAtrTracker.java`
@@ -24,11 +28,11 @@ Buffers daily historical `Bar` objects per request ID in a `ConcurrentHashMap`, 
 
 ### 2. Injected Dependencies
 
-Constructor: `public DailyWilderAtrCalculator(Blackboard blackboard, RequestRegistry registry)`
+Constructor: `public DailyWilderAtrCalculator(StockLookup stocks, RequestRegistry registry)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 
 Instance field: `private final int period = 14`.
@@ -36,7 +40,7 @@ Instance field: `private final int period = 14`.
 ### 3. Method Signatures
 
 ```java
-public DailyWilderAtrCalculator(Blackboard blackboard, RequestRegistry registry)
+public DailyWilderAtrCalculator(StockLookup stocks, RequestRegistry registry)
 
 public void onHistoricalData(int reqId, Bar bar)
 public void onHistoricalDataEnd(int reqId, String startDate, String endDate)
@@ -58,11 +62,11 @@ private double calculateTrueRange(Bar current, double prevClose)
 | `onHistoricalData(int, Bar)` | Mutates `historyBuffer` (`computeIfAbsent`, then `add` on the synchronized list) |
 | `onHistoricalDataEnd(int, String, String)` | Mutates `historyBuffer` (`remove`) |
 
-**Centralized state objects (`Blackboard`)**
+**Centralized state objects (`StockLookup`)**
 
 | Method | Interaction |
 | --- | --- |
-| `onHistoricalDataEnd(int, String, String)` | Reads `registry.getTickerFor(int)`; mutates `blackboard.getStock(ticker).setDailyATR(double)` |
+| `onHistoricalDataEnd(int, String, String)` | Reads `registry.getTickerFor(int)`; mutates `stocks.getStock(ticker).setDailyATR(double)` |
 
 ---
 
@@ -76,11 +80,11 @@ Buffers minute `Bar` objects per request ID in a `ConcurrentHashMap`, aggregates
 
 ### 2. Injected Dependencies
 
-Constructor: `public IntradayWilderAtrTracker(Blackboard blackboard, RequestRegistry registry)`
+Constructor: `public IntradayWilderAtrTracker(StockLookup stocks, RequestRegistry registry)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 
 Instance field: `private final int period = 14`.
@@ -88,7 +92,7 @@ Instance field: `private final int period = 14`.
 ### 3. Method Signatures
 
 ```java
-public IntradayWilderAtrTracker(Blackboard blackboard, RequestRegistry registry)
+public IntradayWilderAtrTracker(StockLookup stocks, RequestRegistry registry)
 
 public void onHistoricalData(int requestId, Bar bar)
 public void onHistoricalDataEnd(int requestId, String start, String end)
@@ -117,11 +121,11 @@ private double calculateTrueRange(Bar current, double previousClose)
 | `onHistoricalDataUpdate(int, Bar)` | Reads `historyBuffer`; inside `synchronized (bars)` mutates the buffered list (`add`, `remove(0)` beyond 1500 entries) |
 | `processUpdate(int, String, String, String)` | Reads `historyBuffer` |
 
-**Centralized state objects (`Blackboard`)**
+**Centralized state objects (`StockLookup`)**
 
 | Method | Interaction |
 | --- | --- |
-| `processUpdate(...)` | Reads `registry.getTickerFor(int)`; reads `blackboard.getStock(ticker)` |
+| `processUpdate(...)` | Reads `registry.getTickerFor(int)`; reads `stocks.getStock(ticker)` |
 | `updateATR(...)` | Mutates `stock.setIntradayATR4/5/12/15(double)` |
 
 ---
@@ -136,11 +140,11 @@ Maintains a per-ticker `VolumeWindow` of completed minute-bar volumes in a `Conc
 
 ### 2. Injected Dependencies
 
-Constructor: `public MinuteVolumeTracker(Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore)`
+Constructor: `public MinuteVolumeTracker(StockLookup stocks, RequestRegistry registry, MarketDataInputStore inputStore)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 | `inputStore` | `mwd.trading.marketdata.MarketDataInputStore` |
 
@@ -153,7 +157,7 @@ Nested types:
 - `private static final class VolumeWindow`
 
 ```java
-public MinuteVolumeTracker(Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore)
+public MinuteVolumeTracker(StockLookup stocks, RequestRegistry registry, MarketDataInputStore inputStore)
 
 public void onHistoricalData(int reqId, Bar bar)
 public void onHistoricalDataEnd(int reqId, String start, String end)
@@ -192,11 +196,11 @@ synchronized Decimal baseline()
 
 `VolumeWindow` guards its `ArrayDeque<BigDecimal> completed`, `BigDecimal sum`, `LocalDate sessionDate`, and `MinuteBar pending` with the instance monitor.
 
-**Centralized state objects (`Blackboard`) and `MarketDataInputStore`**
+**Centralized state objects (`StockLookup`) and `MarketDataInputStore`**
 
 | Method | Interaction |
 | --- | --- |
-| `updateVolume(int, Bar)` | Reads `registry.getTickerFor(int)`; reads `blackboard.getStock(ticker)`; mutates `stock.setLastMinuteVolume(Decimal)` |
+| `updateVolume(int, Bar)` | Reads `registry.getTickerFor(int)`; reads `stocks.getStock(ticker)`; mutates `stock.setLastMinuteVolume(Decimal)` |
 | `publish(String, Stock, VolumeWindow)` | Mutates `stock.setAverageLast15MinuteVolume(Decimal)`; mutates `inputStore.record(ticker, MarketDataInput.MINUTE_VOLUME_BASELINE)` when the baseline is non-zero |
 
 ---
@@ -211,11 +215,11 @@ Buffers minute `Bar` objects per request ID in a `ConcurrentHashMap`, computes a
 
 ### 2. Injected Dependencies
 
-Constructor: `public RsiTracker(Blackboard blackboard, RequestRegistry registry)`
+Constructor: `public RsiTracker(StockLookup stocks, RequestRegistry registry)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 
 Instance field: `private final int period = 14`.
@@ -223,7 +227,7 @@ Instance field: `private final int period = 14`.
 ### 3. Method Signatures
 
 ```java
-public RsiTracker(Blackboard blackboard, RequestRegistry registry)
+public RsiTracker(StockLookup stocks, RequestRegistry registry)
 
 public void onHistoricalData(int requestId, Bar bar)
 public void onHistoricalDataEnd(int requestId, String start, String end)
@@ -249,11 +253,11 @@ private boolean isNewBar(List<Bar> bars, Bar newBar)
 | `onHistoricalDataUpdate(int, Bar)` | Reads `historyBuffer`; inside `synchronized (bars)` mutates the list (`add`, `remove(0)` beyond 1500 entries) |
 | `processUpdate(int)` | Reads `historyBuffer` |
 
-**Centralized state objects (`Blackboard`)**
+**Centralized state objects (`StockLookup`)**
 
 | Method | Interaction |
 | --- | --- |
-| `processUpdate(int)` | Reads `registry.getTickerFor(int)`; mutates `blackboard.getStock(ticker).setRSI(double)` |
+| `processUpdate(int)` | Reads `registry.getTickerFor(int)`; mutates `stocks.getStock(ticker).setRSI(double)` |
 
 ---
 
@@ -267,18 +271,18 @@ Buffers historical closes per request ID, stores five per-ticker tail sums in fi
 
 ### 2. Injected Dependencies
 
-Constructor: `public SimpleMovingAverageTracker(Blackboard blackboard, RequestRegistry registry, TickMap tickMap)`
+Constructor: `public SimpleMovingAverageTracker(StockLookup stocks, RequestRegistry registry, TickMap tickMap)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 | `tickMap` | `mwd.trading.broker.ibkr.TickMap` |
 
 ### 3. Method Signatures
 
 ```java
-public SimpleMovingAverageTracker(Blackboard blackboard, RequestRegistry registry, TickMap tickMap)
+public SimpleMovingAverageTracker(StockLookup stocks, RequestRegistry registry, TickMap tickMap)
 
 public void onHistoricalData(int reqId, Bar bar)
 public void onHistoricalDataEnd(int reqId, String startDate, String endDate)
@@ -307,10 +311,10 @@ private double calculateTailSum(List<Double> prices, int n)
 | `onHistoricalDataEnd(int, String, String)` | Mutates `historyBuffer` (`remove`); mutates `sum199`, `sum99`, `sum49`, `sum19`, `sum9` (`put`) |
 | `updateBlackboard(String, double)` | Reads `sum199`, `sum99`, `sum49`, `sum19`, `sum9` (`get`) |
 
-**Centralized state objects (`Blackboard`)**
+**Centralized state objects (`StockLookup`)**
 
 | Method | Interaction |
 | --- | --- |
 | `onHistoricalDataEnd(int, String, String)` | Reads `registry.getTickerFor(int)`; calls `updateBlackboard` |
 | `onTickPrice(int, int, double, TickAttrib)` | Reads `tickMap.isLast(int)` and `registry.getTickerFor(int)`; calls `updateBlackboard` |
-| `updateBlackboard(String, double)` | Reads `blackboard.getStock(ticker)`; mutates `setSma200`, `setSma100`, `setSma50`, `setSma20`, `setSma10` |
+| `updateBlackboard(String, double)` | Reads `stocks.getStock(ticker)`; mutates `setSma200`, `setSma100`, `setSma50`, `setSma20`, `setSma10` |

@@ -44,12 +44,15 @@ Executing on a strategy poll thread:
 
 | Class | Methods |
 |---|---|
-| `AbstractStrategy` | `run`, `runOneCycle`, `processSymbolSafely`, `executeLifecycle`, `evaluateNewEntry`, `handlePendingEntry`, `handleFlatWithLocalOwnership`, `completeConfirmedFlat`, `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `updateExits`, `entryInputsReady`, `automatedOrderChangesAllowed`, `acknowledgementTimedOut`, `escalate`, `strategyId`, `tradeDirection` |
+| `AbstractStrategy` | `run`, `runOneCycle`, `processSymbolSafely`, `executeLifecycle`, `acknowledgeStatusChange`, `evaluateNewEntry`, `handlePendingEntry`, `handleFlatWithLocalOwnership`, `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `snapshot`, `updateExits`, `entryInputsReady`, `automatedOrderChangesAllowed`, `acknowledgementTimedOut`, `escalate`, `strategyId`, `tradeDirection` |
+| `EntryAdmission` | `tryAdmit`, and `Reservation.keep` / `release` / `close` |
+| `MarketSnapshot` | `of`, taken once per screening pass and once per admitted entry, plus once per management cycle |
 | `TwoSigmaDownsideMeanReversionStrategy`, `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` | `isEntryConditionMet`, `calculateEntryPrice`, `calculateSliceIntents`, `evaluateTickStreamNeed`, `manageOpenPosition`, `onPositionClosed`, `requiredEntryInputs`, `requiredManagementInputs`, `getStrategyName`, `getTradeDirection` |
 | `BracketOrderExecutor` (via `BracketOrderGateway`) | `placeTripleThreat`, `updateTripleThreatExits`, `persistIntent`, `validateEntryIntent`, `configuredAccount`, `halt` |
 | `JsonTradingStateStore` | `recordIntent` (reached from `BracketOrderExecutor.persistIntent`) |
 | `TickByTickManager` (via `TickStreamController`) | `isStreamActive`, `tryRequestStream`, `cancelStream`, `executeRequest`, `isSlotAvailable` |
-| `Blackboard` | `getStock`, `getPositionOwner`, `tryReservePosition`, `releasePosition`, `isPositionOwnedBy`, `tryAcquireGlobalPending`, `releaseGlobalPending`, `isAccountCurrentForNewEntry`, `recordEntrySubmitted`, `setSystemHalted`, `getNextOrderId` |
+| `Blackboard` via `StrategyBlackboard` | `getStock`, `getPositionOwner`, `tryReservePosition`, `releasePosition`, `isPositionOwnedBy`, `tryAcquireGlobalPending`, `releaseGlobalPending`, `isAccountCurrentForNewEntry`, `recordEntrySubmitted`, `getAccount`, `setSystemHalted`. A strategy holds the narrow type and cannot reach anything else on the blackboard |
+| `Blackboard` via `BracketOrderExecutor` | `getNextOrderId`, `getOrderRegistry`, `getStock` — reached on the strategy thread, but through the executor, which holds the full `Blackboard` |
 | `TradingGate` | `allowsNewEntries`, `allowsAutomatedOrderChanges`, `getMode`, `requireManualIntervention` |
 | `MarketDataInputStore` (via `MarketDataFreshness`) | `areAllFresh`, `describeUnready`, `isFresh` — read side only |
 | `OptionsIndicatorStore` | `impliedMoveForNewEntry`, `gammaFlipForNewEntry`, `lastKnownImpliedMove`, `hasFreshFrame`, `tradingDate` — read side only |
@@ -100,7 +103,7 @@ Reached transitively on the same reader thread:
 - `BrokerState.recordPosition`, `recordOpenOrder`, `recordCompletedOrder`, `recordOrderStatus`, `recordExecution`, `snapshot`, `replaceWith`, `clear`.
 - `JsonTradingStateStore.recordBrokerUpdate` → `recordIntent` → `persist` (via `OrderLifecycleHandler.persist`).
 - `Blackboard.releaseGlobalPending`, `releasePosition`, `setSystemHalted`, `setOpenOrderEnd`, `getOrderRegistry().recordBrokerIdentity`.
-- `Stock.getState().set(...)`, `Stock.setActiveBracket(null)`, and the `Stock` setters listed in §3.
+- `Stock.setActiveBracket(null)` and the `Stock` setters listed in §3. The reader thread no longer writes any position state: `Stock.PositionState` is derived from the bracket status it sets.
 
 `IbkrSessionManager.onConnectionClosed` and `onError` execute on the reader thread and hand work to `lifecycleExecutor`; `onManagedAccounts` calls `client.reqAccountUpdates` directly on the reader thread.
 
@@ -148,7 +151,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 |---|---|---|
 | IBKR reader | `volatile` fields on `Stock` / `Account` | strategy poll threads, monitor refresh thread |
 | IBKR reader | `MarketDataInputStore.record` | strategy poll threads via `MarketDataFreshness` |
-| IBKR reader | `Stock.getState()` `AtomicReference`, `Blackboard.releaseGlobalPending`, `Blackboard.releasePosition` | strategy poll threads |
+| IBKR reader | `BracketOrder.status` (`volatile`), from which the strategy threads derive `Stock.PositionState`; `Blackboard.releaseGlobalPending`, `Blackboard.releasePosition` | strategy poll threads |
 | IBKR reader | `lifecycleExecutor.execute` / `.schedule` | `IBKR-Session-Lifecycle` |
 | `Options-Proxy-UDP-Receiver` | `OptionsIndicatorStore` (`ConcurrentMap` + `AtomicReference`) | strategy poll threads |
 | `Earnings-Refresher-Thread` | `EarningsStore.accepted` `AtomicReference` | strategy poll threads |
@@ -179,6 +182,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `ConcurrentMap<String, PendingEntry> pendingEntries = new ConcurrentHashMap<>()` | `AbstractStrategy` |
 | `Set<String> escalatedPendingEntries = ConcurrentHashMap.newKeySet()` | `AbstractStrategy` |
 | `ConcurrentMap<String, String> lastUnreadyReason = new ConcurrentHashMap<>()` | `AbstractStrategy` |
+| `ConcurrentMap<String, BracketOrder.Status> acknowledgedStatus = new ConcurrentHashMap<>()` | `AbstractStrategy` |
 | `Map<String, Instant> lastExitByTicker = new ConcurrentHashMap<>()` | `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` |
 | `Map<String, Integer> takeProfitUpdates = new ConcurrentHashMap<>()` | `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` |
 | `Map<String, Instant> lastTakeProfitUpdate = new ConcurrentHashMap<>()` | `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` |
@@ -208,7 +212,6 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `AtomicBoolean` | `reconnectScheduled`, `apiReadyHandled` | `IbkrSessionManager` |
 | `AtomicBoolean` | `initialized` | `MarketDataSubscriptionManager` |
 | `AtomicReference<EntryOwner>` | `globalPendingOwner` | `Blackboard` |
-| `AtomicReference<PositionState>` | `state` | `Stock` |
 | `AtomicReference<State>` | `state` | `TradingGate` |
 | `AtomicReference<GammaFlip>` | `gammaFlip` | `OptionsIndicatorStore` |
 | `AtomicReference<Accepted>` | `accepted` | `EarningsStore` |
@@ -226,8 +229,6 @@ Compare-and-set / read-modify-write call sites:
 | `globalPendingOwner.compareAndSet(null, new EntryOwner(...))` | `Blackboard.tryAcquireGlobalPending` |
 | `globalPendingOwner.compareAndSet(currentOwner, null)` inside a retry loop | `Blackboard.releaseGlobalPending` |
 | `lastEntrySubmittedAtMillis.updateAndGet(previous -> Math.max(previous, atMillis))` | `Blackboard.recordEntrySubmitted` |
-| `stock.getState().compareAndSet(FLAT, PENDING)` | `AbstractStrategy.evaluateNewEntry` |
-| `stock.getState().compareAndSet(PENDING, FLAT)` | `AbstractStrategy.rollbackEntryReservation` |
 | `state.updateAndGet(...)` with `MANUAL_INTERVENTION` retained unless target is `MANUAL_INTERVENTION` or `STOPPING` | `TradingGate.transitionTo` |
 | `requestId.accumulateAndGet(requestId, Math::max)`, `orderId.accumulateAndGet(orderId, Math::max)` | `IdManager.initializeRequestId`, `initializeOrderId` |
 | `requestId.getAndIncrement()`, `orderId.getAndIncrement()` | `IdManager.getNextRequestId`, `getNextOrderId` |
@@ -270,9 +271,11 @@ Compare-and-set / read-modify-write call sites:
 
 | Barrier | Location |
 |---|---|
-| Engine-wide single-owner entry gate (`AtomicReference<EntryOwner>` CAS from `null`) | `Blackboard.globalPendingOwner`; acquired in `AbstractStrategy.evaluateNewEntry`, released in `handlePendingEntry` (`WORKING_PARENT`, `PARTIAL_PARENT`, `POSITION_OPEN`, terminal branches), `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `evaluateNewEntry`'s `finally`, and `OrderLifecycleHandler.markPositionOpen` / `completeConfirmedFlat` |
+| Engine-wide single-owner entry gate (`AtomicReference<EntryOwner>` CAS from `null`) | `Blackboard.globalPendingOwner`; acquired in `EntryAdmission.tryAdmit`, released in `AbstractStrategy.acknowledgeStatusChange` (`WORKING_PARENT`, `PARTIAL_PARENT`, `POSITION_OPEN`, terminal-with-fill), `cleanupOwnedLifecycle`, `EntryAdmission.Reservation.release()` — which `close()` calls on any path that did not `keep()` — and `OrderLifecycleHandler.markPositionOpen` / `completeConfirmedFlat` |
 | Per-ticker ownership map plus `config.getMaxActivePositions()` cap, under the `Blackboard` monitor | `Blackboard.tryReservePosition` |
-| Per-ticker lifecycle state machine via `AtomicReference<PositionState>` CAS | `Stock.state` |
+| Per-ticker lifecycle state derived rather than stored, so the reader and strategy threads cannot disagree about it | `Stock.positionStateOf(boolean, BracketOrder)` |
+| Per-symbol market data frozen for the length of one decision | `MarketSnapshot.of(Stock, long)` |
+| Edge-triggering for work that must happen once per broker status | `AbstractStrategy.acknowledgedStatus` |
 | Single application-wide mode authority; `MANUAL_INTERVENTION` is sticky except for `STOPPING` | `TradingGate.transitionTo` |
 | All connect/reconnect/subscription work confined to one thread | `IbkrSessionManager.lifecycleExecutor` (`newSingleThreadScheduledExecutor`) |
 | Reconciliation epoch collection confined by the instance monitor; timeout fires on a separate single-thread scheduler and re-checks `activeEpoch.number` under the same monitor | `ReconciliationManager` |
@@ -309,7 +312,6 @@ Compare-and-set / read-modify-write call sites:
 
 | Field | Declaration | Mutating methods |
 |---|---|---|
-| `state` | `final AtomicReference<PositionState>` | exposed via `getState()`; mutated by `AbstractStrategy.evaluateNewEntry`, `rollbackEntryReservation`, `handlePendingEntry`, `completeConfirmedFlat`, and `OrderLifecycleHandler.markPositionOpen`, `completeConfirmedFlat` |
 | `contract` | `Contract` (non-volatile) | `setContract` |
 | `activeBracket` | `volatile BracketOrder` | `setActiveBracket` |
 | `isTradeable` | `volatile boolean` | `setTradeable` |
@@ -341,8 +343,9 @@ Compare-and-set / read-modify-write call sites:
 
 | Field | Declaration | Mutating methods |
 |---|---|---|
-| `pendingEntries` | `final ConcurrentMap<String,PendingEntry>` | `evaluateNewEntry` (put), `handlePendingEntry` (remove), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
-| `escalatedPendingEntries` | `final Set<String>` = `ConcurrentHashMap.newKeySet()` | `escalate` (add), `handlePendingEntry` (remove), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
+| `pendingEntries` | `final ConcurrentMap<String,PendingEntry>` | `evaluateNewEntry` (put), `acknowledgeStatusChange` (remove on `POSITION_OPEN`), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
+| `escalatedPendingEntries` | `final Set<String>` = `ConcurrentHashMap.newKeySet()` | `escalate` (add), `acknowledgeStatusChange` (remove on `POSITION_OPEN`), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
+| `acknowledgedStatus` | `final ConcurrentMap<String,BracketOrder.Status>` | `acknowledgeStatusChange` (`put`, and `remove` when the bracket is gone), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
 | `lastUnreadyReason` | `final ConcurrentMap<String,String>` | `entryInputsReady` (`put` / `remove`) |
 
 ### 3.5 `OneSigmaDownsideMeanReversionStrategy` and `OneSigmaUpsideMeanReversionStrategy`

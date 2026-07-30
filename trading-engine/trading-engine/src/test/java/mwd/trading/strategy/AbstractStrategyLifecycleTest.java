@@ -33,6 +33,7 @@ import mwd.trading.execution.OrderRegistry;
 import mwd.trading.execution.UncertainOrderSubmissionException;
 import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -62,7 +63,7 @@ class AbstractStrategyLifecycleTest {
         strategy.runOneCycle();
 
         Stock stock = fixture.blackboard.getStock("AAPL");
-        assertEquals(Stock.PositionState.OPEN, stock.getState().get());
+        assertEquals(Stock.PositionState.OPEN, positionState(fixture, "AAPL"));
         assertEquals(TestStrategy.ID, fixture.blackboard.getPositionOwner("AAPL"));
         assertEquals(1, fixture.blackboard.getActivePositionCount());
         assertEquals(EngineMode.MANUAL_INTERVENTION, fixture.tradingGate.getMode());
@@ -109,8 +110,7 @@ class AbstractStrategyLifecycleTest {
 
         assertSame(bracket, fixture.blackboard.getStock("AAPL").getActiveBracket());
         assertEquals(BracketOrder.Status.INITIALIZED, bracket.getStatus());
-        assertEquals(Stock.PositionState.PENDING,
-                fixture.blackboard.getStock("AAPL").getState().get());
+        assertEquals(Stock.PositionState.PENDING, positionState(fixture, "AAPL"));
         assertEquals(TestStrategy.ID, fixture.blackboard.getPositionOwner("AAPL"));
         assertTrue(fixture.blackboard.isGlobalPendingOwnedBy(TestStrategy.ID, "AAPL"));
         assertEquals(1, fixture.blackboard.getActivePositionCount());
@@ -130,8 +130,7 @@ class AbstractStrategyLifecycleTest {
         fixture.clock.advanceMillis(5000);
         strategy.runOneCycle();
 
-        assertEquals(Stock.PositionState.PENDING,
-                fixture.blackboard.getStock("AAPL").getState().get());
+        assertEquals(Stock.PositionState.PENDING, positionState(fixture, "AAPL"));
         assertEquals(EngineMode.READY, fixture.tradingGate.getMode());
         // Acknowledgement is the confirmation the serialization lock waits for,
         // so it is released here even though the order has not filled.
@@ -188,8 +187,7 @@ class AbstractStrategyLifecycleTest {
 
         strategy.runOneCycle();
 
-        assertEquals(Stock.PositionState.PENDING,
-                fixture.blackboard.getStock("AAPL").getState().get());
+        assertEquals(Stock.PositionState.PENDING, positionState(fixture, "AAPL"));
         assertEquals(TestStrategy.ID, fixture.blackboard.getPositionOwner("AAPL"));
         assertTrue(fixture.blackboard.isGlobalPendingOwnedBy(TestStrategy.ID, "AAPL"));
         assertEquals(EngineMode.MANUAL_INTERVENTION, fixture.tradingGate.getMode());
@@ -209,8 +207,7 @@ class AbstractStrategyLifecycleTest {
         strategy.runOneCycle();
         strategy.runOneCycle();
 
-        assertEquals(Stock.PositionState.FLAT,
-                fixture.blackboard.getStock("AAPL").getState().get());
+        assertEquals(Stock.PositionState.FLAT, positionState(fixture, "AAPL"));
         assertNull(fixture.blackboard.getStock("AAPL").getActiveBracket());
         assertNull(fixture.blackboard.getPositionOwner("AAPL"));
         assertNull(fixture.blackboard.getGlobalPendingOwner());
@@ -248,9 +245,23 @@ class AbstractStrategyLifecycleTest {
         return fixture;
     }
 
+    private static Stock.PositionState positionState(Fixture fixture, String ticker) {
+        return fixture.blackboard.getStock(ticker)
+                .positionState(fixture.blackboard.getPositionOwner(ticker) != null);
+    }
+
+    /**
+     * There is no position-state field to set any more: OPEN means the ticker is
+     * reserved and its bracket says the parent filled.
+     */
     private static void openOwnedPosition(Blackboard blackboard, String ticker) {
         assertTrue(blackboard.tryReservePosition(ticker, TestStrategy.ID));
-        blackboard.getStock(ticker).getState().set(Stock.PositionState.OPEN);
+        BracketOrder bracketOrder = new BracketOrder(
+                "trade-" + ticker, TestStrategy.ID, "DU123456", 1, "BUY",
+                ticker, 1, Decimal.get(10));
+        bracketOrder.setEntryPrice(100.0);
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
+        blackboard.getStock(ticker).setActiveBracket(bracketOrder);
     }
 
     private record Fixture(
@@ -328,28 +339,28 @@ class AbstractStrategyLifecycleTest {
         }
 
         @Override
-        protected boolean isEntryConditionMet(Stock stock) {
-            entryEvaluationCounts.merge(stock.getTicker(), 1, Integer::sum);
-            if (entryFailures.contains(stock.getTicker())) {
+        protected boolean isEntryConditionMet(MarketSnapshot market) {
+            entryEvaluationCounts.merge(market.ticker(), 1, Integer::sum);
+            if (entryFailures.contains(market.ticker())) {
                 throw new IllegalStateException("test entry failure");
             }
-            return entryTickers.contains(stock.getTicker());
+            return entryTickers.contains(market.ticker());
         }
 
-        @Override protected double calculateEntryPrice(Stock stock) { return 100.0; }
+        @Override protected double calculateEntryPrice(MarketSnapshot market) { return 100.0; }
 
         @Override
         protected List<BracketOrderExecutor.SliceIntent> calculateSliceIntents(
-                Stock stock, double entryPrice) {
+                MarketSnapshot market, double entryPrice) {
             return List.of(new BracketOrderExecutor.SliceIntent(
                     Decimal.get(1), 110.0, 90.0, 1L));
         }
 
         @Override
-        protected void evaluateTickStreamNeed(Stock stock, double entryPrice) {}
+        protected void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice) {}
 
         @Override
-        protected void manageOpenPosition(Stock stock) {
+        protected void manageOpenPosition(Stock stock, MarketSnapshot market) {
             managementCounts.merge(stock.getTicker(), 1, Integer::sum);
             if (managementFailures.contains(stock.getTicker())) {
                 throw new IllegalStateException("test management failure");

@@ -20,7 +20,7 @@ import mwd.trading.broker.ibkr.RequestRegistry;
 import mwd.trading.domain.Stock;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketDataInputStore;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -73,14 +73,14 @@ public class MinuteVolumeTracker {
 	private static final DateTimeFormatter BAR_DATE = DateTimeFormatter.BASIC_ISO_DATE;
 	private static final BigDecimal BASELINE_DIVISOR = BigDecimal.valueOf(BASELINE_BARS);
 
-	private final Blackboard blackboard;
+	private final StockLookup stocks;
 	private final RequestRegistry registry;
 	private final MarketDataInputStore inputStore;
 	private final Map<String, VolumeWindow> windows = new ConcurrentHashMap<>();
 
 	public MinuteVolumeTracker(
-			Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore) {
-		this.blackboard = blackboard;
+			StockLookup stocks, RequestRegistry registry, MarketDataInputStore inputStore) {
+		this.stocks = stocks;
 		this.registry = registry;
 		this.inputStore = inputStore;
 	}
@@ -114,7 +114,7 @@ public class MinuteVolumeTracker {
 			return;
 		}
 
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 		BigDecimal volume = usableVolume(bar);
 		if (volume == null) {
 			// A bar with no usable volume tells us nothing. Leave the previous

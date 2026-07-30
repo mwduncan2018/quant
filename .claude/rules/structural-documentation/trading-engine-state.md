@@ -5,13 +5,17 @@ paths:
 
 # Package `mwd.trading.state`
 
-Source: `trading-engine/trading-engine/src/main/java/mwd/trading/state/Blackboard.java`
+Sources:
+- `trading-engine/trading-engine/src/main/java/mwd/trading/state/Blackboard.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/state/PositionLedger.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/state/StockLookup.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/state/StrategyBlackboard.java`
 
 ---
 
 ## `Blackboard`
 
-`public class Blackboard`
+`public class Blackboard implements StrategyBlackboard`
 
 ### 1. Class/Interface Responsibilities
 
@@ -129,3 +133,97 @@ private static String requireIdentifier(String value, String name)
 | `getMarketTime()`, `getTimeManager()` | `TimeManager` |
 | `getOrderRegistry()` | `OrderRegistry` (four `ConcurrentHashMap` instances) |
 | `getAccount()` | `Account` |
+
+---
+
+## `StockLookup`
+
+`public interface StockLookup`
+
+### 1. Class/Interface Responsibilities
+
+Resolves a ticker to the `Stock` that holds its values. This is the whole
+dependency on shared state of every indicator tracker and of `MinuteBarHandler`,
+`PriceTickHandler`, and `SizeTickHandler`.
+
+### 2. Injected Dependencies
+
+None. Interfaces declare no constructor.
+
+### 3. Method Signatures
+
+```java
+Stock getStock(String ticker)
+```
+
+### 4. Global State Interactions
+
+None declared. `Blackboard.getStock(String)` satisfies it and inserts absent
+tickers via `computeIfAbsent`.
+
+---
+
+## `PositionLedger`
+
+`public interface PositionLedger`
+
+### 1. Class/Interface Responsibilities
+
+The two claims that stand between a strategy and a live order: the engine-wide
+entry lock, so only one submission is outstanding at IBKR at a time, and the
+per-ticker reservation, which is also what enforces `MAX_ACTIVE_POSITIONS`.
+`EntryAdmission` is implemented against this and nothing else.
+
+### 2. Injected Dependencies
+
+None. Interfaces declare no constructor.
+
+### 3. Method Signatures
+
+```java
+boolean tryAcquireGlobalPending(String strategyName, String ticker)
+boolean releaseGlobalPending(String strategyName, String ticker)
+boolean tryReservePosition(String ticker, String strategyName)
+boolean releasePosition(String ticker, String strategyName)
+String getPositionOwner(String ticker)
+boolean isPositionOwnedBy(String ticker, String strategyName)
+```
+
+### 4. Global State Interactions
+
+None declared. In `Blackboard`, the first two are backed by the
+`AtomicReference<EntryOwner> globalPendingOwner` compare-and-set and the last four
+by the `activePositionOwners` `HashMap` under the instance monitor.
+
+---
+
+## `StrategyBlackboard`
+
+`public interface StrategyBlackboard extends PositionLedger, StockLookup`
+
+### 1. Class/Interface Responsibilities
+
+Everything a strategy may reach on the blackboard, and nothing else: the two roles
+it composes plus the account gate and the halt switch. A strategy holding this
+type cannot allocate an IBKR order id, reach `OrderRegistry`, iterate every symbol,
+or clear `openOrderEnd`.
+
+### 2. Injected Dependencies
+
+None. Interfaces declare no constructor.
+
+### 3. Method Signatures
+
+Inherited: the six `PositionLedger` methods and `StockLookup.getStock(String)`.
+
+```java
+boolean isAccountCurrentForNewEntry()
+void recordEntrySubmitted(long atMillis)
+Account getAccount()
+void setSystemHalted(boolean halted)
+```
+
+### 4. Global State Interactions
+
+None declared. `Blackboard` satisfies every method as it already stood, so no call
+site changed when `AbstractStrategy` narrowed to this type.

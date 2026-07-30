@@ -13,7 +13,7 @@ import java.util.Set;
 import com.ib.client.Bar;
 import com.ib.client.Decimal;
 import mwd.trading.domain.Account;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StrategyBlackboard;
 import mwd.trading.execution.BracketOrderExecutor;
 import mwd.trading.execution.BracketOrder;
 import mwd.trading.execution.BracketOrderGateway;
@@ -26,6 +26,7 @@ import mwd.trading.earnings.EarningsStore;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 
@@ -73,7 +74,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     private final Clock newYorkClock;
 
     public TwoSigmaDownsideMeanReversionStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -96,7 +97,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     TwoSigmaDownsideMeanReversionStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -139,17 +140,17 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     @Override
-    protected boolean isEntryConditionMet(Stock stock) {
+    protected boolean isEntryConditionMet(MarketSnapshot market) {
         // ---------------------------------------------------------
         // 1. PENALTY BOX & SYSTEM CHECKS
         // ---------------------------------------------------------
         /*
-    	if (blackboard.isTickerBanned(stock.getTicker())) {
+    	if (blackboard.isTickerBanned(market.ticker())) {
             return false;
         }
         */
 
-        if (!stock.isLongMarginRateVerified()) { 
+        if (!market.longMarginRateVerified()) { 
             return false; 
         }
         
@@ -185,12 +186,12 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         // window is one market day either side of the report, measured in
         // sessions so a weekend or holiday does not shorten it.
         // ---------------------------------------------------------
-        if (isInEarningsBlackout(stock.getTicker(), tradingDate)) {
+        if (isInEarningsBlackout(market.ticker(), tradingDate)) {
             return false;
         }
 
         OptionalDouble impliedMoveForEntry = optionsIndicatorStore.impliedMoveForNewEntry(
-                stock.getTicker(), tradingDate, nowUnixMs);
+                market.ticker(), tradingDate, nowUnixMs);
         if (impliedMoveForEntry.isEmpty()) {
             return false;
         }
@@ -211,13 +212,13 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         // ---------------------------------------------------------
         // 3. THE "TRIPLE LOCK" CAPITULATION FILTER
         // ---------------------------------------------------------
-        double currentPrice = stock.getLastPrice();
+        double currentPrice = market.lastPrice();
         double impliedMove = impliedMoveForEntry.getAsDouble();
-        double structuralTarget = stock.getPreviousClose() - (impliedMove * 2.0);
+        double structuralTarget = market.previousClose() - (impliedMove * 2.0);
 
-        Bar bar = stock.getLastMinuteBar();
-        Decimal minVolDec = stock.getLastMinuteVolume();
-        Decimal avgVolDec = stock.getAverageLast15MinuteVolume();
+        Bar bar = market.lastMinuteBar();
+        Decimal minVolDec = market.lastMinuteVolume();
+        Decimal avgVolDec = market.averageLast15MinuteVolume();
 
         // A zero volume baseline is never a real reading; it means the rolling
         // 15-minute window has not filled for this session yet.
@@ -268,7 +269,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         double assumedStopLoss = currentPrice - (impliedMove * 0.5);
         double actualRisk = currentPrice - assumedStopLoss; 
         
-        double currentVWAP = stock.getDailyVWAP();
+        double currentVWAP = market.dailyVWAP();
         double actualReward = currentVWAP - currentPrice;
 
         if (actualReward < (actualRisk * 2.5)) {
@@ -279,24 +280,24 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     @Override
-    protected double calculateEntryPrice(Stock stock) {
+    protected double calculateEntryPrice(MarketSnapshot market) {
         OptionalDouble dailyImpliedMove =
-                optionsIndicatorStore.lastKnownImpliedMove(stock.getTicker());
+                optionsIndicatorStore.lastKnownImpliedMove(market.ticker());
         if (dailyImpliedMove.isEmpty()) {
             // Without a move there is no priceable entry. NaN fails
             // TradeDirection.acceptsEntryPrice, so the lifecycle rolls back.
             return Double.NaN;
         }
-        return stock.getPreviousClose() - (dailyImpliedMove.getAsDouble() * 2.0);
+        return market.previousClose() - (dailyImpliedMove.getAsDouble() * 2.0);
     }
 
     @Override
     protected List<BracketOrderExecutor.SliceIntent> calculateSliceIntents(
-            Stock stock, double entryPrice) {
+            MarketSnapshot market, double entryPrice) {
 
         List<BracketOrderExecutor.SliceIntent> sliceIntents = new ArrayList<>();
         OptionalDouble storedImpliedMove =
-                optionsIndicatorStore.lastKnownImpliedMove(stock.getTicker());
+                optionsIndicatorStore.lastKnownImpliedMove(market.ticker());
         if (storedImpliedMove.isEmpty()) {
             // An empty intent list produces a zero total quantity, which the
             // lifecycle treats as a clean rollback.
@@ -308,7 +309,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         double stopLossPrice = entryPrice - (dailyImpliedMove * 0.5);
         long timeExitValue = calculateTimeExit();
 
-        Decimal totalQuantity = calculateTotalQuantity(stock, entryPrice, stopLossPrice);
+        Decimal totalQuantity = calculateTotalQuantity(market, entryPrice, stopLossPrice);
         if (totalQuantity.compareTo(Decimal.ZERO) <= 0) return sliceIntents;
 
         long totalShares = (long) totalQuantity.value().doubleValue();
@@ -322,13 +323,14 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         sliceIntents.add(new BracketOrderExecutor.SliceIntent(sliceQuantity, takeProfitPriceA, stopLossPrice, timeExitValue));
 
         // Intention 2: Strategy B (VWAP Target Runner)
-        double takeProfitPriceB = stock.getDailyVWAP();
+        double takeProfitPriceB = market.dailyVWAP();
         sliceIntents.add(new BracketOrderExecutor.SliceIntent(sliceQuantity, takeProfitPriceB, stopLossPrice, timeExitValue));
 
         return sliceIntents;
     }
     
-    private Decimal calculateTotalQuantity(Stock stock, double entryPrice, double stopLossPrice) {
+    private Decimal calculateTotalQuantity(
+            MarketSnapshot market, double entryPrice, double stopLossPrice) {
         double riskPerShare = entryPrice - stopLossPrice;
         if (riskPerShare <= 0) return Decimal.ZERO;
 
@@ -340,7 +342,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         double availableFunds = account.getAvailableFunds();
         if (!(netLiquidation > 0.0) || !(availableFunds > 0.0)) {
             logger.warn("[{}] No usable account state yet (net liquidation {}, available funds {}); "
-                    + "sizing is impossible", stock.getTicker(), netLiquidation, availableFunds);
+                    + "sizing is impossible", market.ticker(), netLiquidation, availableFunds);
             return Decimal.ZERO;
         }
 
@@ -351,11 +353,11 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         double idealShareCount = Math.floor(portfolioRiskAmount / riskPerShare);
         Decimal idealQuantity = Decimal.get(idealShareCount);
         
-        double marginRequirement = stock.calculateMarginRequirement("BUY", idealQuantity, entryPrice);
+        double marginRequirement = market.marginRequirement("BUY", idealQuantity, entryPrice);
         double actualAvailableCash = availableFunds;
 
         if (marginRequirement > actualAvailableCash) {
-            double marginRate = stock.getLongMarginRate();
+            double marginRate = market.longMarginRate();
             double affordableShares = Math.floor(actualAvailableCash / (entryPrice * marginRate));
             if (affordableShares <= 0) return Decimal.ZERO;
             return Decimal.get(affordableShares);
@@ -420,9 +422,9 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
     
     @Override
-    protected void evaluateTickStreamNeed(Stock stock, double entryPrice) {
-        double lastPrice = stock.getLastPrice();
-        String ticker = stock.getTicker();
+    protected void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice) {
+        double lastPrice = market.lastPrice();
+        String ticker = market.ticker();
         boolean isStreamActive = tickStreamController.isStreamActive(ticker);
 
         if (!isStreamActive && lastPrice <= entryPrice * 1.0025) {
@@ -433,16 +435,16 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     @Override
-    protected void manageOpenPosition(Stock stock) {
+    protected void manageOpenPosition(Stock stock, MarketSnapshot market) {
         BracketOrder bracketOrder = stock.getActiveBracket();
         if (bracketOrder == null) return;
 
         List<BracketOrder.ExitSlice> slices = bracketOrder.getSlices();
         if (slices.size() < 2) return;
 
-        double lastPrice = stock.getLastPrice();
+        double lastPrice = market.lastPrice();
         double entryPrice = bracketOrder.getEntryPrice();
-        double currentVWAP = stock.getDailyVWAP();
+        double currentVWAP = market.dailyVWAP();
 
         double executionCostBuffer = 0.02;
         double trueBreakEvenPrice = entryPrice + executionCostBuffer;
@@ -457,7 +459,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         boolean ripcordPulled = (currentRisk > 0) && (currentReward < (currentRisk * 1.2));
 
         if (ripcordPulled) {
-            logger.warn("[{}] Ripcord Pulled! Executing 1.5% Deep Sweep Abort.", stock.getTicker());
+            logger.warn("[{}] Ripcord Pulled! Executing 1.5% Deep Sweep Abort.", market.ticker());
             
             // Calculate a marketable limit price 1.5% below current market to ensure a fill
             double deepSweepPrice = lastPrice * 0.985; 
@@ -470,7 +472,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             }
             
             /*
-            blackboard.banTickerForDay(stock.getTicker());
+            blackboard.banTickerForDay(market.ticker());
             */
             
             return;
@@ -483,10 +485,10 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         // in force when the position opened, retained by the store.
         // ---------------------------------------------------------
         OptionalDouble retainedImpliedMove =
-                optionsIndicatorStore.lastKnownImpliedMove(stock.getTicker());
+                optionsIndicatorStore.lastKnownImpliedMove(market.ticker());
         if (retainedImpliedMove.isEmpty()) {
             logger.warn("[{}] No Static Daily Implied Move is retained; leaving the existing "
-                    + "protective exits untouched", stock.getTicker());
+                    + "protective exits untouched", market.ticker());
             return;
         }
         double dailyImpliedMove = retainedImpliedMove.getAsDouble();
@@ -531,7 +533,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             }
 
             int volumeWeightedAveragePriceAdjustmentsMade = bracketOrder.getUpdateCount() - 7; 
-            double floorPrice = stock.getPreviousClose() - (dailyImpliedMove * 1.2);
+            double floorPrice = market.previousClose() - (dailyImpliedMove * 1.2);
             boolean targetNeedsUpdate = false;
             double nextTakeProfitB = currentTakeProfitB;
 

@@ -25,14 +25,15 @@ import mwd.trading.execution.UncertainOrderSubmissionException;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StrategyBlackboard;
 
 public abstract class AbstractStrategy implements Runnable {
     private record PendingEntry(long submittedAtMillis) {}
 
     protected final Logger logger = LogManager.getLogger(getClass());
-    protected final Blackboard blackboard;
+    protected final StrategyBlackboard blackboard;
     protected final BracketOrderGateway bracketOrderGateway;
     protected final TickStreamController tickStreamController;
     protected final Config config;
@@ -45,9 +46,22 @@ public abstract class AbstractStrategy implements Runnable {
     private final ConcurrentMap<String, PendingEntry> pendingEntries = new ConcurrentHashMap<>();
     private final Set<String> escalatedPendingEntries = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<String, String> lastUnreadyReason = new ConcurrentHashMap<>();
+    /**
+     * The broker status this strategy has already reacted to, per ticker.
+     *
+     * <p>
+     * The lifecycle state is derived now, so the lag between the reader thread
+     * updating a bracket and this strategy noticing no longer exists to serve as
+     * an unread marker. Some work has to happen exactly once per transition -
+     * releasing the engine-wide lock, escalating a partial fill - and on every
+     * later poll the derived state looks identical. This records what has been
+     * acted on, making the edge explicit instead of implicit in a timing gap.
+     */
+    private final ConcurrentMap<String, BracketOrder.Status> acknowledgedStatus =
+            new ConcurrentHashMap<>();
 
     protected AbstractStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -66,7 +80,7 @@ public abstract class AbstractStrategy implements Runnable {
     }
 
     protected AbstractStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -118,7 +132,7 @@ public abstract class AbstractStrategy implements Runnable {
         String ticker = stock.getTicker();
         String owner = blackboard.getPositionOwner(ticker);
 
-        switch (stock.getState().get()) {
+        switch (stock.positionState(owner != null)) {
             case FLAT -> {
                 if (owner != null) {
                     if (strategyId.equals(owner)) {
@@ -130,7 +144,8 @@ public abstract class AbstractStrategy implements Runnable {
             }
             case PENDING -> {
                 if (strategyId.equals(owner)) {
-                    handlePendingEntry(stock, strategyId);
+                    acknowledgeStatusChange(stock, strategyId);
+                    handlePendingEntry(stock);
                 } else if (owner == null) {
                     escalate(stock, "Pending position has no strategy owner");
                 }
@@ -142,14 +157,69 @@ public abstract class AbstractStrategy implements Runnable {
                     }
                     return;
                 }
+                acknowledgeStatusChange(stock, strategyId);
                 if (automatedOrderChangesAllowed(stock)) {
-                    manageOpenPosition(stock);
+                    manageOpenPosition(stock, snapshot(stock));
                 }
             }
-            case CLOSING -> {
-                if (owner == null) {
-                    escalate(stock, "Closing position has no strategy owner");
+        }
+    }
+
+    /**
+     * Runs the once-per-transition work for whatever the broker last reported.
+     *
+     * <p>
+     * Every branch here used to sit inside {@code handlePendingEntry}, fired by
+     * observing a status while the stored state still read {@code PENDING}. With
+     * the state derived, {@code POSITION_OPEN} reads as {@code OPEN} on the very
+     * first poll and that branch would never be entered, so the work moved here
+     * and is edge-triggered explicitly against the last status acted on.
+     */
+    private void acknowledgeStatusChange(Stock stock, String strategyId) {
+        BracketOrder bracketOrder = stock.getActiveBracket();
+        String ticker = stock.getTicker();
+        BracketOrder.Status status = bracketOrder == null ? null : bracketOrder.getStatus();
+
+        if (status == acknowledgedStatus.get(ticker)) {
+            return;
+        }
+        if (status == null) {
+            acknowledgedStatus.remove(ticker);
+            return;
+        }
+        acknowledgedStatus.put(ticker, status);
+
+        switch (status) {
+            case WORKING_PARENT ->
+                // IBKR has acknowledged the order and it is live at the exchange,
+                // which is the confirmation the serialization lock waits for. It is
+                // released here so a resting limit cannot park every strategy;
+                // there is no timeout on this state.
+                //
+                // Ownership of the ticker is deliberately NOT released. The
+                // position stays reserved and keeps counting against
+                // MAX_ACTIVE_POSITIONS until the order fills or terminates.
+                blackboard.releaseGlobalPending(strategyId, ticker);
+            case PARTIAL_PARENT -> {
+                blackboard.releaseGlobalPending(strategyId, ticker);
+                escalate(stock, "Entry received a partial fill; verify position and protective exits");
+            }
+            case POSITION_OPEN -> {
+                blackboard.releaseGlobalPending(strategyId, ticker);
+                pendingEntries.remove(ticker);
+                escalatedPendingEntries.remove(ticker);
+            }
+            case CANCELLED, REJECTED -> {
+                if (!isZero(bracketOrder.getFilledQuantity())) {
+                    blackboard.releaseGlobalPending(strategyId, ticker);
+                    escalate(stock, "Terminal parent status followed a fill; verify the live position");
                 }
+                // A clean terminal derives FLAT, so cleanup runs through
+                // handleFlatWithLocalOwnership on this same cycle.
+            }
+            case INITIALIZED, FILLED -> {
+                // INITIALIZED is the status the entry was admitted in, and FILLED
+                // derives FLAT; neither carries once-only work of its own.
             }
         }
     }
@@ -161,14 +231,21 @@ public abstract class AbstractStrategy implements Runnable {
         if (!tradingGate.allowsNewEntries()
                 || !stock.isTradeable()
                 || !blackboard.isAccountCurrentForNewEntry()
-                || !entryInputsReady(stock)
-                || !isEntryConditionMet(stock)) {
+                || !entryInputsReady(stock)) {
             return;
         }
 
-        double entryPrice = calculateEntryPrice(stock);
-        evaluateTickStreamNeed(stock, entryPrice);
-        if (!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)) {
+        // Screening only. This view is thrown away if it survives to the lock,
+        // because by then the tape has moved and the decision has to be made
+        // again on what is true at that point.
+        MarketSnapshot screening = snapshot(stock);
+        if (!isEntryConditionMet(screening)) {
+            return;
+        }
+
+        double entryPrice = calculateEntryPrice(screening);
+        evaluateTickStreamNeed(screening, entryPrice);
+        if (!tradeDirection().acceptsEntryPrice(screening.lastPrice(), entryPrice)) {
             return;
         }
         // Everything above is advisory: it can be recomputed freely because
@@ -183,20 +260,29 @@ public abstract class AbstractStrategy implements Runnable {
 
             if (!tradingGate.allowsNewEntries()
                     || !marketDataFreshness.areAllFresh(
-                            stock.getTicker(), requiredEntryInputs())
-                    || !isEntryConditionMet(stock)) {
+                            stock.getTicker(), requiredEntryInputs())) {
                 rollbackEntryReservation(stock, reservation);
                 return;
             }
 
-            entryPrice = calculateEntryPrice(stock);
-            if (!tradeDirection().acceptsEntryPrice(stock.getLastPrice(), entryPrice)) {
+            // Taken after the lock, and the only view the order is built from.
+            // The entry test, the limit price, and the exit levels all read it,
+            // so what the gate proved about this data still holds of the order
+            // that carries it.
+            MarketSnapshot market = snapshot(stock);
+            if (!isEntryConditionMet(market)) {
+                rollbackEntryReservation(stock, reservation);
+                return;
+            }
+
+            entryPrice = calculateEntryPrice(market);
+            if (!tradeDirection().acceptsEntryPrice(market.lastPrice(), entryPrice)) {
                 rollbackEntryReservation(stock, reservation);
                 return;
             }
 
             List<BracketOrderExecutor.SliceIntent> sliceIntents =
-                    calculateSliceIntents(stock, entryPrice);
+                    calculateSliceIntents(market, entryPrice);
             Decimal totalQuantity = totalQuantity(sliceIntents);
             if (totalQuantity.compareTo(Decimal.ZERO) <= 0) {
                 rollbackEntryReservation(stock, reservation);
@@ -242,57 +328,25 @@ public abstract class AbstractStrategy implements Runnable {
         }
     }
 
-    private void handlePendingEntry(Stock stock, String strategyId) {
-        BracketOrder bracketOrder = stock.getActiveBracket();
+    /**
+     * The time-driven half of a pending entry. Status-driven work is
+     * edge-triggered in {@link #acknowledgeStatusChange}; what is left here has to
+     * be re-evaluated every poll because it depends on the clock rather than on
+     * anything the broker sent.
+     */
+    private void handlePendingEntry(Stock stock) {
         PendingEntry pendingEntry = pendingEntries.get(stock.getTicker());
-        if (bracketOrder == null) {
-            if (pendingEntry == null
-                    || acknowledgementTimedOut(pendingEntry.submittedAtMillis())) {
-                escalate(stock, "Pending entry has no local bracket and cannot be resolved safely");
-            }
+        boolean timedOut = pendingEntry == null
+                || acknowledgementTimedOut(pendingEntry.submittedAtMillis());
+        if (!timedOut) {
             return;
         }
 
-        switch (bracketOrder.getStatus()) {
-            case INITIALIZED -> {
-                if (pendingEntry == null
-                        || acknowledgementTimedOut(pendingEntry.submittedAtMillis())) {
-                    escalate(stock, "IBKR did not acknowledge the entry before the configured timeout");
-                }
-            }
-            case WORKING_PARENT -> {
-                // IBKR has acknowledged the order and it is live at the exchange,
-                // which is the confirmation the serialization lock waits for. It
-                // is released here so a resting limit cannot park every strategy
-                // indefinitely; there is no timeout on this state.
-                //
-                // Ownership of the ticker is deliberately NOT released. The
-                // position stays reserved and keeps counting against
-                // MAX_ACTIVE_POSITIONS until the order fills or terminates, so
-                // the concurrency limit is what bounds exposure from here.
-                blackboard.releaseGlobalPending(strategyId, stock.getTicker());
-            }
-            case PARTIAL_PARENT -> {
-                stock.getState().set(Stock.PositionState.OPEN);
-                blackboard.releaseGlobalPending(strategyId, stock.getTicker());
-                escalate(stock, "Entry received a partial fill; verify position and protective exits");
-            }
-            case POSITION_OPEN -> {
-                stock.getState().set(Stock.PositionState.OPEN);
-                blackboard.releaseGlobalPending(strategyId, stock.getTicker());
-                pendingEntries.remove(stock.getTicker());
-                escalatedPendingEntries.remove(stock.getTicker());
-            }
-            case CANCELLED, REJECTED -> {
-                if (isZero(bracketOrder.getFilledQuantity())) {
-                    completeConfirmedFlat(stock, strategyId, bracketOrder);
-                } else {
-                    stock.getState().set(Stock.PositionState.OPEN);
-                    blackboard.releaseGlobalPending(strategyId, stock.getTicker());
-                    escalate(stock, "Terminal parent status followed a fill; verify the live position");
-                }
-            }
-            case FILLED -> completeConfirmedFlat(stock, strategyId, bracketOrder);
+        BracketOrder bracketOrder = stock.getActiveBracket();
+        if (bracketOrder == null) {
+            escalate(stock, "Pending entry has no local bracket and cannot be resolved safely");
+        } else if (bracketOrder.getStatus() == BracketOrder.Status.INITIALIZED) {
+            escalate(stock, "IBKR did not acknowledge the entry before the configured timeout");
         }
     }
 
@@ -305,12 +359,6 @@ public abstract class AbstractStrategy implements Runnable {
         }
     }
 
-    private void completeConfirmedFlat(
-            Stock stock, String strategyId, BracketOrder bracketOrder) {
-        stock.getState().set(Stock.PositionState.FLAT);
-        cleanupOwnedLifecycle(stock, strategyId, bracketOrder);
-    }
-
     private void cleanupOwnedLifecycle(
             Stock stock, String strategyId, BracketOrder bracketOrder) {
         onPositionClosed(stock);
@@ -318,6 +366,7 @@ public abstract class AbstractStrategy implements Runnable {
         blackboard.releasePosition(stock.getTicker(), strategyId);
         pendingEntries.remove(stock.getTicker());
         escalatedPendingEntries.remove(stock.getTicker());
+        acknowledgedStatus.remove(stock.getTicker());
         if (tickStreamController.isStreamActive(stock.getTicker())) {
             tickStreamController.cancelStream(stock.getTicker());
         }
@@ -334,6 +383,7 @@ public abstract class AbstractStrategy implements Runnable {
         reservation.release();
         pendingEntries.remove(stock.getTicker());
         escalatedPendingEntries.remove(stock.getTicker());
+        acknowledgedStatus.remove(stock.getTicker());
         if (tickStreamController.isStreamActive(stock.getTicker())) {
             tickStreamController.cancelStream(stock.getTicker());
         }
@@ -344,8 +394,8 @@ public abstract class AbstractStrategy implements Runnable {
             executeLifecycle(stock);
         } catch (RuntimeException exception) {
             stock.setTradeable(false);
-            if (stock.getState().get() != Stock.PositionState.FLAT
-                    || blackboard.getPositionOwner(stock.getTicker()) != null) {
+            if (blackboard.getPositionOwner(stock.getTicker()) != null
+                    || stock.getActiveBracket() != null) {
                 escalate(stock, "Strategy failure while a trade lifecycle is active");
             }
             logger.error("[{}] Strategy cycle failed; this symbol has been disabled",
@@ -360,7 +410,7 @@ public abstract class AbstractStrategy implements Runnable {
             double takeProfitPrice,
             double stopLossPrice,
             long timeExitValue) {
-        if (stock.getState().get() != Stock.PositionState.OPEN
+        if (stock.positionState(true) != Stock.PositionState.OPEN
                 || !blackboard.isPositionOwnedBy(stock.getTicker(), strategyId())
                 || !automatedOrderChangesAllowed(stock)) {
             return;
@@ -384,6 +434,19 @@ public abstract class AbstractStrategy implements Runnable {
      * indistinguishable from a broken one, but logging every poll would bury the
      * transition that matters.
      */
+    /** One coherent read of everything a decision about this symbol needs. */
+    protected final MarketSnapshot snapshot(Stock stock) {
+        return MarketSnapshot.of(stock, clock.millis());
+    }
+
+    /**
+     * The same for a symbol this strategy watches but does not trade, so a
+     * reference reading is as coherent as the traded one.
+     */
+    protected final MarketSnapshot snapshot(String ticker) {
+        return snapshot(blackboard.getStock(ticker));
+    }
+
     private boolean entryInputsReady(Stock stock) {
         Optional<String> unready =
                 marketDataFreshness.describeUnready(stock.getTicker(), requiredEntryInputs());
@@ -494,16 +557,16 @@ public abstract class AbstractStrategy implements Runnable {
     /** The market-data inputs that must be usable before exits are repriced. */
     protected abstract Set<MarketDataInput> requiredManagementInputs();
 
-    protected abstract boolean isEntryConditionMet(Stock stock);
+    protected abstract boolean isEntryConditionMet(MarketSnapshot market);
 
-    protected abstract double calculateEntryPrice(Stock stock);
+    protected abstract double calculateEntryPrice(MarketSnapshot market);
 
     protected abstract List<BracketOrderExecutor.SliceIntent> calculateSliceIntents(
-            Stock stock, double entryPrice);
+            MarketSnapshot market, double entryPrice);
 
-    protected abstract void evaluateTickStreamNeed(Stock stock, double entryPrice);
+    protected abstract void evaluateTickStreamNeed(MarketSnapshot market, double entryPrice);
 
-    protected abstract void manageOpenPosition(Stock stock);
+    protected abstract void manageOpenPosition(Stock stock, MarketSnapshot market);
 
     protected abstract String getStrategyName();
 

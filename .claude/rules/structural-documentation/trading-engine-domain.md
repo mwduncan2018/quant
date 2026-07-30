@@ -69,7 +69,9 @@ No `Blackboard` reference. The single instance is created inside the `Blackboard
 
 ### 1. Class/Interface Responsibilities
 
-Per-ticker mutable value holder for position state, IBKR `Contract`, active `BracketOrder`, margin rates and verification flags, tick prices and sizes, moving averages, volumes, ATR values, RSI, implied-move/gamma-flip mirror values, portfolio figures, the next earnings instant, and the last minute `Bar`.
+Per-ticker mutable value holder for the IBKR `Contract`, active `BracketOrder`, margin rates and verification flags, tick prices and sizes, moving averages, volumes, ATR values, RSI, implied-move/gamma-flip mirror values, portfolio figures, the next earnings instant, and the last minute `Bar`. The per-ticker
+`PositionState` is derived from the active bracket and the caller's ownership answer
+rather than stored.
 
 ### 2. Injected Dependencies
 
@@ -83,12 +85,13 @@ The constructor also initialises `lastUpdate` to `System.currentTimeMillis()`.
 
 ### 3. Method Signatures
 
-Nested type: `public enum PositionState { FLAT, PENDING, OPEN, CLOSING }`
+Nested type: `public enum PositionState { FLAT, PENDING, OPEN }`
 
 ```java
 public Stock(String ticker)
 
-public AtomicReference<PositionState> getState()
+public static PositionState positionStateOf(boolean owned, BracketOrder bracket)
+public PositionState positionState(boolean owned)
 public boolean isTradeable()
 public void setTradeable(boolean tradeable)
 private void refreshLastUpdate()
@@ -194,11 +197,20 @@ public Bar getLastMinuteBar()
 
 **Concurrent collections / atomics**
 
-| Field | Declared type |
-| --- | --- |
-| `state` | `final AtomicReference<PositionState>` initialised to `PositionState.FLAT` |
+None. `PositionState` is not stored: `positionStateOf(boolean, BracketOrder)` computes it
+from the caller's ownership answer and `BracketOrder.getStatus()`, and
+`positionState(boolean)` applies it to this instance's `activeBracket`. The only
+mutable input is the `volatile activeBracket` field listed below.
 
-`getState()` returns the `AtomicReference` itself, so callers mutate it directly via `set` and `compareAndSet`.
+Mapping, verbatim from `positionStateOf`:
+
+| `bracket` | `bracket.getStatus()` | Result |
+| --- | --- | --- |
+| non-`null` | `INITIALIZED`, `WORKING_PARENT` | `PENDING` |
+| non-`null` | `PARTIAL_PARENT`, `POSITION_OPEN` | `OPEN` |
+| non-`null` | `FILLED` | `FLAT` |
+| non-`null` | `CANCELLED`, `REJECTED` | `FLAT` when `getFilledQuantity()` is `null` or zero, otherwise `OPEN` |
+| `null` | — | `PENDING` when `owned`, otherwise `FLAT` |
 
 **Volatile fields**
 

@@ -5,10 +5,17 @@ paths:
 
 # Package `mwd.trading.marketdata`
 
+> `MinuteBarHandler`, `PriceTickHandler`, and `SizeTickHandler` are injected with
+> `mwd.trading.state.StockLookup` rather than `Blackboard`: `getStock(String)` is their
+> whole dependency on shared state. `MarketDataSubscriptionManager` and
+> `TickByTickManager` still take the full `Blackboard`, because they also allocate
+> request ids.
+
 Sources:
 - `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/MarketDataFreshness.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/MarketDataInput.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/MarketDataInputStore.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/MarketSnapshot.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/MarketDataSubscriptionManager.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/MinuteBarHandler.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/marketdata/PriceTickHandler.java`
@@ -148,6 +155,62 @@ No `Blackboard` reference. The store holds metadata only; the values themselves 
 
 ---
 
+## `MarketSnapshot`
+
+`public record MarketSnapshot(String ticker, long takenAtUnixMs, double lastPrice, double previousClose, double dailyVWAP, Bar lastMinuteBar, Decimal lastMinuteVolume, Decimal averageLast15MinuteVolume, double longMarginRate, boolean longMarginRateVerified, double shortMarginRate, boolean shortMarginRateVerified)`
+
+### 1. Class/Interface Responsibilities
+
+Immutable copy of every market-data value one decision reads, taken from a `Stock`
+in a single pass. `Stock` holds each figure in its own `volatile` field, written by
+the IBKR reader thread as ticks arrive, so a strategy reading those fields directly
+could assemble one decision from several different moments in the tape. Every
+strategy hook that reads market data takes this instead.
+
+### 2. Injected Dependencies
+
+Canonical record constructor parameters, in declaration order:
+
+| Parameter | Exact type |
+| --- | --- |
+| `ticker` | `java.lang.String` (null-checked in the compact constructor) |
+| `takenAtUnixMs` | `long` |
+| `lastPrice`, `previousClose`, `dailyVWAP` | `double` |
+| `lastMinuteBar` | `com.ib.client.Bar` |
+| `lastMinuteVolume`, `averageLast15MinuteVolume` | `com.ib.client.Decimal` |
+| `longMarginRate`, `shortMarginRate` | `double` |
+| `longMarginRateVerified`, `shortMarginRateVerified` | `boolean` |
+
+### 3. Method Signatures
+
+```java
+public MarketSnapshot(String ticker, long takenAtUnixMs, double lastPrice, double previousClose, double dailyVWAP, Bar lastMinuteBar, Decimal lastMinuteVolume, Decimal averageLast15MinuteVolume, double longMarginRate, boolean longMarginRateVerified, double shortMarginRate, boolean shortMarginRateVerified)
+
+public static MarketSnapshot of(Stock stock, long takenAtUnixMs)
+public double marginRequirement(String action, Decimal quantity, double price)
+```
+
+Record accessors are generated for every component.
+
+### 4. Global State Interactions
+
+**Concurrent collections**
+
+None. The record is immutable once constructed.
+
+| Method | Interaction |
+| --- | --- |
+| `of(Stock, long)` | Reads `getTicker`, `getLastPrice`, `getPreviousClose`, `getDailyVWAP`, `getLastMinuteBar`, `getLastMinuteVolume`, `getAverageLast15MinuteVolume`, `getLongMarginRate`, `isLongMarginRateVerified`, `getShortMarginRate`, `isShortMarginRateVerified` — one read each, no writes |
+| `marginRequirement(String, Decimal, double)` | Reads the captured `longMarginRate` for `"BUY"` (case-insensitive), otherwise `shortMarginRate`; mirrors `Stock.calculateMarginRequirement` against frozen values |
+
+The reader thread can write between two of the reads in `of`, so the result is not
+an instant of the tape. It is one bounded window that every consumer of that
+snapshot agrees on. `AbstractStrategy` takes one to screen with and a second after
+the engine-wide entry lock is held; the second is the only view the order is
+built from.
+
+---
+
 ## `MarketDataSubscriptionManager`
 
 `public final class MarketDataSubscriptionManager`
@@ -227,18 +290,18 @@ Validates each incoming minute `Bar`, stores it on the matching `Stock`, and rec
 
 ### 2. Injected Dependencies
 
-Constructor: `public MinuteBarHandler(Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore)`
+Constructor: `public MinuteBarHandler(StockLookup stocks, RequestRegistry registry, MarketDataInputStore inputStore)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 | `inputStore` | `mwd.trading.marketdata.MarketDataInputStore` |
 
 ### 3. Method Signatures
 
 ```java
-public MinuteBarHandler(Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore)
+public MinuteBarHandler(StockLookup stocks, RequestRegistry registry, MarketDataInputStore inputStore)
 
 public void onHistoricalData(int reqId, Bar bar)
 public void onHistoricalDataUpdate(int reqId, Bar bar)
@@ -253,11 +316,11 @@ private boolean isUsable(Bar bar)
 
 Holds none.
 
-**Centralized state objects (`Blackboard`) and `MarketDataInputStore`**
+**Centralized state objects (`StockLookup`) and `MarketDataInputStore`**
 
 | Method | Interaction |
 | --- | --- |
-| `updateLastMinuteBar(int, Bar)` | Reads `registry.getTickerFor(int)`; mutates `blackboard.getStock(ticker).setLastMinuteBar(Bar)`; mutates `inputStore.record(ticker, MarketDataInput.MINUTE_BAR)` |
+| `updateLastMinuteBar(int, Bar)` | Reads `registry.getTickerFor(int)`; mutates `stocks.getStock(ticker).setLastMinuteBar(Bar)`; mutates `inputStore.record(ticker, MarketDataInput.MINUTE_BAR)` |
 
 Both public methods delegate to `updateLastMinuteBar`.
 
@@ -273,11 +336,11 @@ Routes IBKR price ticks and tick-by-tick price callbacks to the matching `Stock`
 
 ### 2. Injected Dependencies
 
-Constructor: `public PriceTickHandler(Blackboard blackboard, RequestRegistry registry, TickMap tickMap, MarketDataInputStore inputStore)`
+Constructor: `public PriceTickHandler(StockLookup stocks, RequestRegistry registry, TickMap tickMap, MarketDataInputStore inputStore)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 | `tickMap` | `mwd.trading.broker.ibkr.TickMap` |
 | `inputStore` | `mwd.trading.marketdata.MarketDataInputStore` |
@@ -285,7 +348,7 @@ Constructor: `public PriceTickHandler(Blackboard blackboard, RequestRegistry reg
 ### 3. Method Signatures
 
 ```java
-public PriceTickHandler(Blackboard blackboard, RequestRegistry registry, TickMap tickMap, MarketDataInputStore inputStore)
+public PriceTickHandler(StockLookup stocks, RequestRegistry registry, TickMap tickMap, MarketDataInputStore inputStore)
 
 public void onTickPrice(int reqId, int field, double price, TickAttrib attribs)
 public void onTickString(int reqId, int tickType, String value)
@@ -302,13 +365,13 @@ public void onTickByTickAllLast(int reqId, double price)
 | --- | --- |
 | `formatConfirmed` | `Set<String>` = `ConcurrentHashMap.newKeySet()` — symbols whose first `RT_VOLUME` payload has been logged |
 
-**Centralized state objects (`Blackboard`) and `MarketDataInputStore`**
+**Centralized state objects (`StockLookup`) and `MarketDataInputStore`**
 
 | Method | Interaction |
 | --- | --- |
-| `onTickPrice(int, int, double, TickAttrib)` | Reads `registry.getTickerFor(int)` and `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk`, `setLastPrice`, `setMarkPrice`, `setOpen`, `setPreviousClose`, `setDailyHigh`, `setDailyLow`; mutates `inputStore.record(...)` for `LAST_PRICE` and `PREVIOUS_CLOSE` |
+| `onTickPrice(int, int, double, TickAttrib)` | Reads `registry.getTickerFor(int)` and `tickMap.isBid/isAsk/isLast/isMarkPrice/isOpen/isClose/isHigh/isLow(int)`; mutates `stocks.getStock(ticker)` via `setBid`, `setAsk`, `setLastPrice`, `setMarkPrice`, `setOpen`, `setPreviousClose`, `setDailyHigh`, `setDailyLow`; mutates `inputStore.record(...)` for `LAST_PRICE` and `PREVIOUS_CLOSE` |
 | `onTickString(int, int, String)` | Ignores any `tickType` other than `TickType.RT_VOLUME` (48) and any blank payload; reads `registry.getTickerFor(int)`; mutates `stock.setDailyVWAP(double)` and `inputStore.record(ticker, MarketDataInput.DAILY_VWAP)`; mutates the `formatConfirmed` key set once per symbol |
-| `onTickByTickBidAsk(int, double, double)` | Reads `registry.getTickerFor(int)`; mutates `blackboard.getStock(ticker)` via `setBid`, `setAsk` |
+| `onTickByTickBidAsk(int, double, double)` | Reads `registry.getTickerFor(int)`; mutates `stocks.getStock(ticker)` via `setBid`, `setAsk` |
 | `onTickByTickAllLast(int, double)` | Reads `registry.getTickerFor(int)`; mutates `stock.setLastPrice(double)` and `inputStore.record(ticker, MarketDataInput.LAST_PRICE)` |
 
 ---
@@ -323,18 +386,18 @@ Routes IBKR size ticks and tick-by-tick size callbacks to the matching `Stock` s
 
 ### 2. Injected Dependencies
 
-Constructor: `public SizeTickHandler(Blackboard blackboard, RequestRegistry registry, TickMap tickMap)`
+Constructor: `public SizeTickHandler(StockLookup stocks, RequestRegistry registry, TickMap tickMap)`
 
 | Parameter | Exact type |
 | --- | --- |
-| `blackboard` | `mwd.trading.state.Blackboard` |
+| `stocks` | `mwd.trading.state.StockLookup` |
 | `registry` | `mwd.trading.broker.ibkr.RequestRegistry` |
 | `tickMap` | `mwd.trading.broker.ibkr.TickMap` |
 
 ### 3. Method Signatures
 
 ```java
-public SizeTickHandler(Blackboard blackboard, RequestRegistry registry, TickMap tickMap)
+public SizeTickHandler(StockLookup stocks, RequestRegistry registry, TickMap tickMap)
 
 public void onTickSize(int reqId, int field, Decimal size)
 public void onTickByTickBidAsk(int reqId, Decimal bidSize, Decimal askSize)
@@ -351,7 +414,7 @@ Holds none.
 
 | Method | Interaction |
 | --- | --- |
-| `onTickSize(int, int, Decimal)` | Reads `registry.getTickerFor(int)` and `tickMap.isBidSize/isAskSize/isLastSize/isVolume/isAverageVolume(int)`; mutates `blackboard.getStock(ticker)` via `setBidSize`, `setAskSize`, `setLastSize`, `setIntradayVolume`, `setAverageDailyVolume` |
+| `onTickSize(int, int, Decimal)` | Reads `registry.getTickerFor(int)` and `tickMap.isBidSize/isAskSize/isLastSize/isVolume/isAverageVolume(int)`; mutates `stocks.getStock(ticker)` via `setBidSize`, `setAskSize`, `setLastSize`, `setIntradayVolume`, `setAverageDailyVolume` |
 | `onTickByTickBidAsk(int, Decimal, Decimal)` | Reads `registry.getTickerFor(int)`; mutates `setBidSize`, `setAskSize` |
 | `onTickByTickAllLast(int, Decimal)` | Reads `registry.getTickerFor(int)`; mutates `setLastSize` |
 
@@ -443,4 +506,4 @@ private void executeRequest(String ticker)
 
 | Method | Interaction |
 | --- | --- |
-| `executeRequest(String)` | Reads `blackboard.getStock(ticker)` and `stock.getContract()`; mutates `blackboard.getNextRequestId()` |
+| `executeRequest(String)` | Reads `stocks.getStock(ticker)` and `stock.getContract()`; mutates `blackboard.getNextRequestId()` |

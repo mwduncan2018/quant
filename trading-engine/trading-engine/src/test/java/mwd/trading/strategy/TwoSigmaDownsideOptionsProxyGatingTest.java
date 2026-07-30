@@ -30,6 +30,7 @@ import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketDataInputStore;
+import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -117,17 +118,26 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         return blackboard.getStock(TICKER);
     }
 
+    /**
+     * The values as one decision sees them. A strategy reads a snapshot now, so a
+     * test that mutates the stock and then calls a hook must take the snapshot
+     * after the mutation - the same ordering the engine has.
+     */
+    private MarketSnapshot market() {
+        return MarketSnapshot.of(stock(), NOW_MS);
+    }
+
     @Test
     void aFullyReadyProxyAllowsTheEntry() {
         assertTrue(store.accept(frame(1).build(), NOW_MS));
 
-        assertTrue(strategy.isEntryConditionMet(stock()));
-        assertEquals(96.0, strategy.calculateEntryPrice(stock()), 1.0e-9);
+        assertTrue(strategy.isEntryConditionMet(market()));
+        assertEquals(96.0, strategy.calculateEntryPrice(market()), 1.0e-9);
     }
 
     @Test
     void noProxyDataAtAllBlocksTheEntry() {
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -137,7 +147,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 .setStaticDailyImpliedMoveValid(false)
                 .build(), NOW_MS));
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -147,7 +157,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 .setSpyGammaFlipValid(false)
                 .build(), NOW_MS));
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -155,7 +165,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         assertTrue(store.accept(
                 frame(1).setTradingDate(PREVIOUS_TRADING_DATE.toString()).build(), NOW_MS));
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -163,7 +173,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         long tooOld = NOW_MS - MAX_AGE_MS - 1;
         assertTrue(store.accept(frame(1).setEmittedAtUnixMs(tooOld).build(), tooOld));
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -172,12 +182,12 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 .setSpyGammaFlip(0.0)
                 .setSpyGammaFlipValid(false)
                 .build(), NOW_MS));
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
 
         // The proxy hot-reloads the manual JSON file, so the next frame is valid.
         assertTrue(store.accept(frame(2).build(), NOW_MS));
 
-        assertTrue(strategy.isEntryConditionMet(stock()));
+        assertTrue(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -185,7 +195,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         assertTrue(store.accept(frame(1).build(), NOW_MS));
         blackboard.getStock("SPY").setLastPrice(GAMMA_FLIP - 0.01);
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
@@ -194,36 +204,35 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         stock().setDailyImpliedMove(IMPLIED_MOVE);
         blackboard.getStock("SPY").setGammaFlip(GAMMA_FLIP);
 
-        assertFalse(strategy.isEntryConditionMet(stock()));
+        assertFalse(strategy.isEntryConditionMet(market()));
     }
 
     @Test
     void sliceIntentsAreEmptyWithoutARetainedMove() {
-        assertTrue(strategy.calculateSliceIntents(stock(), 96.0).isEmpty());
-        assertTrue(Double.isNaN(strategy.calculateEntryPrice(stock())));
+        assertTrue(strategy.calculateSliceIntents(market(), 96.0).isEmpty());
+        assertTrue(Double.isNaN(strategy.calculateEntryPrice(market())));
         assertFalse(TradeDirection.LONG.acceptsEntryPrice(
-                96.0, strategy.calculateEntryPrice(stock())));
+                96.0, strategy.calculateEntryPrice(market())));
     }
 
     @Test
     void aSilentProxyBlocksEntriesWhileAnOpenPositionIsStillManaged() {
         assertTrue(store.accept(frame(1).build(), NOW_MS));
-        assertTrue(strategy.isEntryConditionMet(stock()));
+        assertTrue(strategy.isEntryConditionMet(market()));
 
         // The proxy goes quiet: the retained move outlives the freshness window.
         TwoSigmaDownsideMeanReversionStrategy laterStrategy = strategyAt(
                 NOW.plusMillis(MAX_AGE_MS + 1));
-        assertFalse(laterStrategy.isEntryConditionMet(stock()));
+        assertFalse(laterStrategy.isEntryConditionMet(market()));
 
         Stock stock = stock();
-        stock.getState().set(Stock.PositionState.OPEN);
         BracketOrder bracketOrder = openBracket(stock);
         assertEquals(95.0, bracketOrder.getSlices().get(0).getStopLossPrice(), 1.0e-9);
 
         // Price has run past entry + (move * 0.5), so the break-even trigger must
         // still fire off the retained Static Daily Implied Move.
         stock.setLastPrice(97.5);
-        laterStrategy.manageOpenPosition(stock);
+        laterStrategy.manageOpenPosition(stock, market());
 
         assertEquals(96.02, bracketOrder.getSlices().get(0).getStopLossPrice(), 1.0e-9);
     }
@@ -231,7 +240,6 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
     @Test
     void theRipcordStillFiresWhenNoProxyDataWasEverReceived() {
         Stock stock = stock();
-        stock.getState().set(Stock.PositionState.OPEN);
         BracketOrder bracketOrder = openBracket(stock);
 
         // Reward has collapsed below 1.2x risk, and nothing was ever received
@@ -240,7 +248,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         stock.setDailyVWAP(99.0);
         assertTrue(store.lastKnownImpliedMove(TICKER).isEmpty());
 
-        strategy.manageOpenPosition(stock);
+        strategy.manageOpenPosition(stock, market());
 
         double deepSweepPrice = Math.round(97.5 * 0.985 * 100.0) / 100.0;
         for (BracketOrder.ExitSlice slice : bracketOrder.getSlices()) {
@@ -297,6 +305,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
             slice.setStopLossPrice(95.0);
             slice.setTakeProfitPrice(99.0);
         }
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
         stock.setActiveBracket(bracketOrder);
         assertTrue(blackboard.tryReservePosition(
                 TICKER, TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID));

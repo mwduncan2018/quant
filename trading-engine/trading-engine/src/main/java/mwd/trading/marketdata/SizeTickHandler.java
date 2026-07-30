@@ -3,19 +3,19 @@ package mwd.trading.marketdata;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import com.ib.client.Decimal;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import mwd.trading.domain.Stock;
 import mwd.trading.broker.ibkr.RequestRegistry;
 import mwd.trading.broker.ibkr.TickMap;
 
 public class SizeTickHandler {
 	private static final Logger logger = LogManager.getLogger(SizeTickHandler.class);
-	private final Blackboard blackboard;
+	private final StockLookup stocks;
 	private final RequestRegistry registry;
 	private final TickMap tickMap;
 
-	public SizeTickHandler(Blackboard blackboard, RequestRegistry registry, TickMap tickMap) {
-		this.blackboard = blackboard;
+	public SizeTickHandler(StockLookup stocks, RequestRegistry registry, TickMap tickMap) {
+		this.stocks = stocks;
 		this.registry = registry;
 		this.tickMap = tickMap;
 	}
@@ -28,7 +28,7 @@ public class SizeTickHandler {
 		if (ticker == null)
 			return;
 
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 
 		if (tickMap.isBidSize(field)) {
 			stock.setBidSize(size);
@@ -52,7 +52,7 @@ public class SizeTickHandler {
 		if (ticker == null)
 			return;
 
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 		if (stock == null)
 			return;
 
@@ -69,7 +69,7 @@ public class SizeTickHandler {
 		if (ticker == null)
 			return;
 
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 		if (stock == null)
 			return;
 

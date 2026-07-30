@@ -97,19 +97,19 @@ Swing monitor.
 
 ### Strategy consumption (strategy threads)
 
-15. **Initiating Component:** a concrete strategy's `isEntryConditionMet(Stock)`
+15. **Initiating Component:** a concrete strategy's `isEntryConditionMet(MarketSnapshot)`
     **Method Invocation:** `optionsIndicatorStore.impliedMoveForNewEntry(String ticker, LocalDate tradingDate, long nowUnixMs)`
     **Receiving Component:** `OptionsIndicatorStore`
 
-16. **Initiating Component:** `TwoSigmaDownsideMeanReversionStrategy.isEntryConditionMet(Stock)`
+16. **Initiating Component:** `TwoSigmaDownsideMeanReversionStrategy.isEntryConditionMet(MarketSnapshot)`
     **Method Invocation:** `optionsIndicatorStore.gammaFlipForNewEntry(LocalDate tradingDate, long nowUnixMs)`, then compares `blackboard.getStock("SPY").getLastPrice()` against the returned level after checking `marketDataFreshness.isFresh("SPY", MarketDataInput.LAST_PRICE)`
     **Receiving Component:** `OptionsIndicatorStore`, `Blackboard`, `MarketDataInputStore`
 
-17. **Initiating Component:** a concrete strategy's `calculateEntryPrice(Stock)` and `calculateSliceIntents(Stock, double)`
+17. **Initiating Component:** a concrete strategy's `calculateEntryPrice(MarketSnapshot)` and `calculateSliceIntents(MarketSnapshot, double)`
     **Method Invocation:** `optionsIndicatorStore.lastKnownImpliedMove(String ticker)`; an empty result yields `Double.NaN` or an empty intent list
     **Receiving Component:** `OptionsIndicatorStore`
 
-18. **Initiating Component:** a concrete strategy's `manageOpenPosition(Stock)`
+18. **Initiating Component:** a concrete strategy's `manageOpenPosition(Stock, MarketSnapshot)`
     **Method Invocation:** `optionsIndicatorStore.lastKnownImpliedMove(String ticker)`, which ignores freshness so an open position can still be managed
     **Receiving Component:** `OptionsIndicatorStore`
 
