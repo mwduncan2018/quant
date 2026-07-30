@@ -34,6 +34,7 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.MarginMethodology;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -94,7 +95,7 @@ class OneSigmaUpsideStrategyTest {
         OneSigmaUpsideMeanReversionStrategy built =
                 new OneSigmaUpsideMeanReversionStrategy(
                         blackboard, gateway, new NoopTickStreams(), config, tradingGate,
-                        inputStore, UNIVERSE_REFERENCE, optionsStore, calendar, Clock.fixed(now, ZoneOffset.UTC));
+                        inputStore, UNIVERSE_REFERENCE, permissiveLimits(), optionsStore, calendar, Clock.fixed(now, ZoneOffset.UTC));
         primeState();
         return built;
     }
@@ -107,6 +108,14 @@ class OneSigmaUpsideStrategyTest {
         stock.setPreviousClose(PREVIOUS_CLOSE);
         stock.setLastPrice(ENTRY_LEVEL);
         stock.setDailyVWAP(101.0);
+    }
+
+    /**
+     * Permissive caps. These tests are about strategy logic, not concentration;
+     * the limits have their own tests.
+     */
+    private ConcentrationLimits permissiveLimits() {
+        return new ConcentrationLimits(blackboard, UNIVERSE_REFERENCE, 100.0, 100.0, 0.0);
     }
 
     private Stock stock() {

@@ -29,6 +29,7 @@ import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.state.StrategyBlackboard;
 
@@ -132,10 +133,12 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
             UniverseReference universeReference,
+            ConcentrationLimits concentrationLimits,
             OptionsIndicatorStore optionsIndicatorStore,
             MarketCalendarStore marketCalendarStore) {
         this(blackboard, bracketOrderGateway, tickStreamController, config, tradingGate,
-                marketDataFreshness, universeReference, optionsIndicatorStore, marketCalendarStore,
+                marketDataFreshness, universeReference, concentrationLimits,
+                optionsIndicatorStore, marketCalendarStore,
                 Clock.systemUTC());
     }
 
@@ -147,11 +150,12 @@ public class OneSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
             UniverseReference universeReference,
+            ConcentrationLimits concentrationLimits,
             OptionsIndicatorStore optionsIndicatorStore,
             MarketCalendarStore marketCalendarStore,
             Clock clock) {
         super(blackboard, bracketOrderGateway, tickStreamController, config, tradingGate,
-                marketDataFreshness, universeReference,
+                marketDataFreshness, universeReference, concentrationLimits,
                 config.getStrategyUniverse(STRATEGY_ID), clock);
         this.optionsIndicatorStore = Objects.requireNonNull(
                 optionsIndicatorStore, "optionsIndicatorStore");

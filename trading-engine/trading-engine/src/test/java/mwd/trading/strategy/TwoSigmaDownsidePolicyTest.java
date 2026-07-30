@@ -39,6 +39,7 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.MarginMethodology;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -108,7 +109,7 @@ class TwoSigmaDownsidePolicyTest {
                         config,
                         tradingGate,
                         inputStore,
-                        UNIVERSE_REFERENCE,
+                        UNIVERSE_REFERENCE, permissiveLimits(),
                         optionsStore,
                         earnings,
                         calendar,
@@ -134,6 +135,14 @@ class TwoSigmaDownsidePolicyTest {
                 "20260727  10:00:00", 96.8, 97.0, 95.5, 96.5,
                 Decimal.get(5000), 42, Decimal.get(96)));
         blackboard.getStock("SPY").setLastPrice(610.0);
+    }
+
+    /**
+     * Permissive caps. These tests are about strategy logic, not concentration;
+     * the limits have their own tests.
+     */
+    private ConcentrationLimits permissiveLimits() {
+        return new ConcentrationLimits(blackboard, UNIVERSE_REFERENCE, 100.0, 100.0, 0.0);
     }
 
     private Stock stock() {

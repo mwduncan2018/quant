@@ -33,6 +33,7 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.MarginMethodology;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
@@ -84,7 +85,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 config,
                 tradingGate,
                 marketDataReadyAt(NOW),
-                UNIVERSE_REFERENCE,
+                UNIVERSE_REFERENCE, permissiveLimits(),
                 store,
                 // Far-off earnings and a standard session, so each assertion
                 // isolates the options-proxy condition under test.
@@ -120,6 +121,14 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 .setStaticDailyImpliedMoveValid(true)
                 .setSpyGammaFlip(GAMMA_FLIP)
                 .setSpyGammaFlipValid(true);
+    }
+
+    /**
+     * Permissive caps. These tests are about strategy logic, not concentration;
+     * the limits have their own tests.
+     */
+    private ConcentrationLimits permissiveLimits() {
+        return new ConcentrationLimits(blackboard, UNIVERSE_REFERENCE, 100.0, 100.0, 0.0);
     }
 
     private Stock stock() {
@@ -276,7 +285,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
                 config,
                 tradingGate,
                 marketDataReadyAt(instant),
-                UNIVERSE_REFERENCE,
+                UNIVERSE_REFERENCE, permissiveLimits(),
                 store,
                 // Far-off earnings and a standard session, so each assertion
                 // isolates the options-proxy condition under test.

@@ -24,6 +24,7 @@ import mwd.trading.execution.OrderRegistry;
 import mwd.trading.config.Config;
 import mwd.trading.config.EnvPropConfig;
 import mwd.trading.broker.ibkr.IdManager;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.MarginMethodology;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.broker.ibkr.RequestRegistry;
@@ -223,6 +224,17 @@ public class Main {
                 Set.copyOf(marketDataSymbols), java.time.LocalDate.now())) {
             logger.info(line);
         }
+        ConcentrationLimits concentrationLimits = new ConcentrationLimits(
+                blackboard,
+                universeReference,
+                config.getMaxTickerExposurePercent(),
+                config.getMaxSectorExposurePercent(),
+                config.getMinPositionNotional());
+        logger.info("Concentration limits: {}% per ticker, {}% per sector, refusing anything "
+                + "trimmed below {} notional",
+                config.getMaxTickerExposurePercent(), config.getMaxSectorExposurePercent(),
+                config.getMinPositionNotional());
+
         universeReference.ageInDays(java.time.LocalDate.now())
                 .filter(age -> age > config.getUniverseReferenceMaxAgeDays())
                 .ifPresent(age -> logger.warn(
@@ -251,6 +263,7 @@ public class Main {
                         tradingGate,
                         marketDataInputStore,
                         universeReference,
+                        concentrationLimits,
                         optionsIndicatorStore,
                         earningsStore,
                         marketCalendarStore)),
@@ -262,6 +275,7 @@ public class Main {
                         tradingGate,
                         marketDataInputStore,
                         universeReference,
+                        concentrationLimits,
                         optionsIndicatorStore,
                         marketCalendarStore)),
                 strategyThread(new OneSigmaUpsideMeanReversionStrategy(
@@ -272,6 +286,7 @@ public class Main {
                         tradingGate,
                         marketDataInputStore,
                         universeReference,
+                        concentrationLimits,
                         optionsIndicatorStore,
                         marketCalendarStore)));
         strategyThreads.forEach(Thread::start);

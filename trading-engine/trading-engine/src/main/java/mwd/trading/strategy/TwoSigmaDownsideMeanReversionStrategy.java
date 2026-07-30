@@ -29,6 +29,7 @@ import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.UniverseReference;
 
 public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
@@ -82,6 +83,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
             UniverseReference universeReference,
+            ConcentrationLimits concentrationLimits,
             OptionsIndicatorStore optionsIndicatorStore,
             EarningsStore earningsStore,
             MarketCalendarStore marketCalendarStore) {
@@ -93,6 +95,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
                 tradingGate,
                 marketDataFreshness,
                 universeReference,
+                concentrationLimits,
                 optionsIndicatorStore,
                 earningsStore,
                 marketCalendarStore,
@@ -107,6 +110,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
             UniverseReference universeReference,
+            ConcentrationLimits concentrationLimits,
             OptionsIndicatorStore optionsIndicatorStore,
             EarningsStore earningsStore,
             MarketCalendarStore marketCalendarStore,
@@ -119,6 +123,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
                 tradingGate,
                 marketDataFreshness,
                 universeReference,
+                concentrationLimits,
                 config.getStrategyUniverse(STRATEGY_ID),
                 clock);
         this.optionsIndicatorStore = Objects.requireNonNull(

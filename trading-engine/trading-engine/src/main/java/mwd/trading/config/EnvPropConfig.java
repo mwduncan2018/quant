@@ -29,6 +29,9 @@ public class EnvPropConfig implements Config {
 	private double defaultLongMarginRate = 0.50;
 	private double defaultShortMarginRate = 0.50;
 	private long universeReferenceMaxAgeDays = 30;
+	private double maxTickerExposurePercent = 30.0;
+	private double maxSectorExposurePercent = 50.0;
+	private double minPositionNotional = 2000.0;
 	private boolean earningsEnabled = true;
 	private String earningsEndpointUrl = "http://127.0.0.1:8000/earnings";
 	private long earningsConnectTimeoutMs = 3000;
@@ -135,6 +138,13 @@ public class EnvPropConfig implements Config {
 				value("DEFAULT_SHORT_MARGIN_RATE", properties, "0.50"));
 		this.universeReferenceMaxAgeDays = Long.parseLong(
 				value("UNIVERSE_REFERENCE_MAX_AGE_DAYS", properties, "30"));
+
+		this.maxTickerExposurePercent = Double.parseDouble(
+				value("MAX_TICKER_EXPOSURE_PCT", properties, "30"));
+		this.maxSectorExposurePercent = Double.parseDouble(
+				value("MAX_SECTOR_EXPOSURE_PCT", properties, "50"));
+		this.minPositionNotional = Double.parseDouble(
+				value("MIN_POSITION_NOTIONAL", properties, "2000"));
 
 		// 7. Initialize the options-proxy earnings endpoint
 		this.earningsEnabled = Boolean.parseBoolean(
@@ -309,6 +319,21 @@ public class EnvPropConfig implements Config {
 	@Override
 	public double getDefaultShortMarginRate() {
 		return this.defaultShortMarginRate;
+	}
+
+	@Override
+	public double getMaxTickerExposurePercent() {
+		return this.maxTickerExposurePercent;
+	}
+
+	@Override
+	public double getMaxSectorExposurePercent() {
+		return this.maxSectorExposurePercent;
+	}
+
+	@Override
+	public double getMinPositionNotional() {
+		return this.minPositionNotional;
 	}
 
 	@Override

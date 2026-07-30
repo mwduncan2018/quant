@@ -40,6 +40,9 @@ public final class TestConfig implements Config {
     @Override public double getDefaultLongMarginRate() { return 0.50; }
     @Override public double getDefaultShortMarginRate() { return 0.50; }
     @Override public long getUniverseReferenceMaxAgeDays() { return 30; }
+    @Override public double getMaxTickerExposurePercent() { return 100.0; }
+    @Override public double getMaxSectorExposurePercent() { return 100.0; }
+    @Override public double getMinPositionNotional() { return 0.0; }
     @Override public boolean isEarningsEnabled() { return true; }
     @Override public String getEarningsEndpointUrl() { return "http://127.0.0.1:8000/earnings"; }
     @Override public long getEarningsConnectTimeoutMs() { return 1000; }

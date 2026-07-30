@@ -1,6 +1,7 @@
 package mwd.trading.strategy;
 
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -27,6 +28,7 @@ import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
+import mwd.trading.risk.ConcentrationLimits;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.state.StrategyBlackboard;
 
@@ -42,6 +44,8 @@ public abstract class AbstractStrategy implements Runnable {
     protected final MarketDataFreshness marketDataFreshness;
     /** Per-ticker sectors and margin rates; configuration, not measurement. */
     protected final UniverseReference universeReference;
+    /** Account-level caps that reduce, but never raise, a strategy's own sizing. */
+    protected final ConcentrationLimits concentrationLimits;
 
     private final EntryAdmission entryAdmission;
     private final Set<String> universe;
@@ -71,6 +75,7 @@ public abstract class AbstractStrategy implements Runnable {
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
             UniverseReference universeReference,
+            ConcentrationLimits concentrationLimits,
             Set<String> universe) {
         this(
                 blackboard,
@@ -80,6 +85,7 @@ public abstract class AbstractStrategy implements Runnable {
                 tradingGate,
                 marketDataFreshness,
                 universeReference,
+                concentrationLimits,
                 universe,
                 Clock.systemUTC());
     }
@@ -92,6 +98,7 @@ public abstract class AbstractStrategy implements Runnable {
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
             UniverseReference universeReference,
+            ConcentrationLimits concentrationLimits,
             Set<String> universe,
             Clock clock) {
         this.blackboard = Objects.requireNonNull(blackboard, "blackboard");
@@ -101,6 +108,8 @@ public abstract class AbstractStrategy implements Runnable {
         this.tradingGate = Objects.requireNonNull(tradingGate, "tradingGate");
         this.marketDataFreshness = Objects.requireNonNull(marketDataFreshness, "marketDataFreshness");
         this.universeReference = Objects.requireNonNull(universeReference, "universeReference");
+        this.concentrationLimits =
+                Objects.requireNonNull(concentrationLimits, "concentrationLimits");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.entryAdmission = new EntryAdmission(this.blackboard);
 
@@ -294,6 +303,25 @@ public abstract class AbstractStrategy implements Runnable {
             if (totalQuantity.compareTo(Decimal.ZERO) <= 0) {
                 rollbackEntryReservation(stock, reservation);
                 return;
+            }
+
+            // The strategy has sized itself against its own risk budget. The
+            // account-level caps can only reduce that, and are applied here
+            // rather than inside any strategy because two strategies entering
+            // the same sector have to see one total between them.
+            Decimal allowedQuantity = concentrationLimits.allowedQuantity(
+                    stock.getTicker(), entryPrice, totalQuantity);
+            if (allowedQuantity.compareTo(totalQuantity) < 0) {
+                sliceIntents = trimToTotal(sliceIntents, totalQuantity, allowedQuantity);
+                totalQuantity = totalQuantity(sliceIntents);
+                if (totalQuantity.compareTo(Decimal.ZERO) <= 0) {
+                    logger.info("[{}] Entry refused: a concentration limit left no usable size",
+                            stock.getTicker());
+                    rollbackEntryReservation(stock, reservation);
+                    return;
+                }
+                logger.info("[{}] Concentration limit trimmed the entry to {} shares",
+                        stock.getTicker(), totalQuantity);
             }
 
             try {
@@ -517,6 +545,49 @@ public abstract class AbstractStrategy implements Runnable {
 
     private TradeDirection tradeDirection() {
         return Objects.requireNonNull(getTradeDirection(), "tradeDirection");
+    }
+
+    /**
+     * Scales every slice down so the bundle sums to {@code allowed}, keeping the
+     * strategy's exit structure intact.
+     *
+     * <p>
+     * A slice that would round away is a refusal, not a restructure: the strategy
+     * chose how many exits this position has, and silently shipping fewer would
+     * hand it a shape it never asked for - the two-slice strategy manages its
+     * slices by position. Rounding loss is given to the first slice so the parts
+     * still sum exactly to the parent quantity, which the executor enforces.
+     */
+    static List<BracketOrderExecutor.SliceIntent> trimToTotal(
+            List<BracketOrderExecutor.SliceIntent> sliceIntents,
+            Decimal requested,
+            Decimal allowed) {
+        if (allowed.compareTo(Decimal.ZERO) <= 0) {
+            return List.of();
+        }
+        double requestedShares = requested.value().doubleValue();
+        double allowedShares = allowed.value().doubleValue();
+
+        List<BracketOrderExecutor.SliceIntent> trimmed = new ArrayList<>(sliceIntents.size());
+        double assigned = 0;
+        for (BracketOrderExecutor.SliceIntent intent : sliceIntents) {
+            double share = Math.floor(
+                    intent.quantity.value().doubleValue() * allowedShares / requestedShares);
+            if (share <= 0) {
+                return List.of();
+            }
+            assigned += share;
+            trimmed.add(new BracketOrderExecutor.SliceIntent(
+                    Decimal.get(share), intent.takeProfitPrice, intent.stopLossPrice,
+                    intent.timeExit));
+        }
+
+        double remainder = allowedShares - assigned;
+        if (remainder > 0) {
+            BracketOrderExecutor.SliceIntent first = trimmed.get(0);
+            first.quantity = Decimal.get(first.quantity.value().doubleValue() + remainder);
+        }
+        return trimmed;
     }
 
     private static Decimal totalQuantity(List<BracketOrderExecutor.SliceIntent> sliceIntents) {
