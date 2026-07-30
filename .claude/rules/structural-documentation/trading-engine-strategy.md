@@ -61,6 +61,7 @@ private void evaluateNewEntry(Stock stock, String strategyId)
 private void handlePendingEntry(Stock stock)
 private void handleFlatWithLocalOwnership(Stock stock)
 private void cleanupOwnedLifecycle(Stock stock, String strategyId, BracketOrder bracketOrder)
+private boolean hasUnfinishedLifecycle(String ticker)
 private void rollbackEntryReservation(Stock stock, EntryAdmission.Reservation reservation)
 private void processSymbolSafely(Stock stock)
 
@@ -109,7 +110,7 @@ Protected fields available to subclasses: `logger` (`Logger`), `blackboard` (`St
 | `pendingEntries` | `ConcurrentMap<String, PendingEntry>` = `new ConcurrentHashMap<>()` |
 | `escalatedPendingEntries` | `Set<String>` = `ConcurrentHashMap.newKeySet()` |
 | `lastUnreadyReason` | `ConcurrentMap<String, String>` = `new ConcurrentHashMap<>()` |
-| `acknowledgedStatus` | `ConcurrentMap<String, BracketOrder.Status>` = `new ConcurrentHashMap<>()` — the last broker status this strategy reacted to, per ticker |
+| `acknowledgedStatus` | `ConcurrentMap<String, Acknowledged>` = `new ConcurrentHashMap<>()` where `private record Acknowledged(String tradeId, BracketOrder.Status status)` — the last broker status this strategy reacted to, per ticker, tied to the trade it belonged to |
 | `universe` | `final Set<String>` (immutable) |
 
 | Method | Interaction |
@@ -135,7 +136,8 @@ Protected fields available to subclasses: `logger` (`Logger`), `blackboard` (`St
 | `trimToTotal(List, Decimal, Decimal)` | Pure function over the slice intents. Scales each proportionally and gives the rounding loss to the first, because `BracketOrderExecutor.validateEntryIntent` requires the parts to sum exactly to the parent. Returns an empty list when any slice would round to zero: the strategy chose how many exits the position has, and shipping fewer would hand it a shape it never asked for |
 | `handlePendingEntry(Stock)` | Reads `stock.getActiveBracket()` and the clock only; no state writes beyond `escalate` |
 | `handleFlatWithLocalOwnership(Stock)` | Reads `stock.getActiveBracket()`; calls `cleanupOwnedLifecycle` or `escalate` |
-| `cleanupOwnedLifecycle(...)` | Calls `onPositionClosed(Stock)`; mutates `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)`, `stock.setActiveBracket(null)`; calls `tickStreamController.isStreamActive/cancelStream` |
+| `hasUnfinishedLifecycle(String)` | Reads `pendingEntries`, `acknowledgedStatus`, and `escalatedPendingEntries`. True means a trade of this strategy's ended without it running its own cleanup, which is what happens whenever the reader thread reaches the terminal status first |
+| `cleanupOwnedLifecycle(...)` | Clears `pendingEntries`, `escalatedPendingEntries`, and `acknowledgedStatus` first, so a throwing hook cannot make the next poll repeat the whole cleanup; then mutates `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)`, `stock.setActiveBracket(null)`, calls `tickStreamController.isStreamActive/cancelStream`, and finally `onPositionClosed(Stock)` |
 | `rollbackEntryReservation(...)` | Calls `reservation.release()`, which gives back both holdings; calls `tickStreamController.cancelStream` |
 | `processSymbolSafely(Stock)` | On `RuntimeException` mutates `stock.setTradeable(false)`; reads `blackboard.getPositionOwner(String)` and `stock.getActiveBracket()` |
 | `snapshot(Stock)` / `snapshot(String)` | Reads every market-data field of the `Stock` once into an immutable `MarketSnapshot`; `snapshot(String)` resolves the symbol through `blackboard.getStock(...)` first |

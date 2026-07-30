@@ -281,10 +281,26 @@ frees the engine-wide lock rather than parking every strategy behind it.
 
 **Broker statuses are acknowledged exactly once.** Deriving the state removed the
 lag that used to make each status observable a single time, so
-`acknowledgedStatus` restores it explicitly: a per-ticker map of the last status
-this strategy acted on. Releasing the global lock on `WORKING_PARENT`, escalating
-a partial fill, and clearing the pending maps on `POSITION_OPEN` are all
-edge-triggered off it rather than off a poll.
+`acknowledgedStatus` restores it explicitly: a per-ticker record of the last
+status this strategy acted on **and the trade it belonged to**. Releasing the
+global lock on `WORKING_PARENT`, escalating a partial fill, and clearing the
+pending maps on `POSITION_OPEN` are all edge-triggered off it rather than off a
+poll.
+
+The trade id is load-bearing, not decoration. Statuses repeat across trades and
+trade ids do not, so matching on the status alone let a value left behind by an
+earlier trade on the same ticker read as already acknowledged — and since the
+global lock is released here and nowhere else for a resting parent, one false
+match parked every strategy in the engine until that order filled or died.
+
+**A trade the reader thread finishes still gets closed out.**
+`completeConfirmedFlat` clears the bracket and releases the ticker in the same
+call, on every terminal path, so the owning strategy usually never observes
+`FLAT` while it still holds the reservation — which is the condition the cleanup
+path keys on. The `FLAT` branch therefore also checks whether this strategy has
+leftover per-ticker state, and closes the books first if so. Without that,
+`onPositionClosed` never fires, which is what the re-entry cooldown and the
+take-profit message budget both hang off.
 
 Strategies also see a narrowed blackboard. `StrategyBlackboard` composes
 `PositionLedger` (the two claims) and `StockLookup` (`getStock`) plus the account

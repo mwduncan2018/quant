@@ -114,7 +114,7 @@ Consequences worth stating, all verbatim from the source:
 | `activePositionOwners` | `Blackboard` | `private final Map<String, String> activePositionOwners = new HashMap<>();` — ticker absent / ticker → strategyName |
 | `lastEntrySubmittedAtMillis` | `Blackboard` | `AtomicLong` |
 | `pendingEntries` | `AbstractStrategy` | `ConcurrentMap<String, PendingEntry>` where `private record PendingEntry(long submittedAtMillis)` |
-| `acknowledgedStatus` | `AbstractStrategy` | `ConcurrentMap<String, BracketOrder.Status>` — the last broker status this strategy acted on, per ticker |
+| `acknowledgedStatus` | `AbstractStrategy` | `ConcurrentMap<String, Acknowledged>` where `private record Acknowledged(String tradeId, BracketOrder.Status status)` — the last broker status this strategy acted on, per ticker, tied to the trade it belonged to |
 | `escalatedPendingEntries` | `AbstractStrategy` | `Set<String>` (`ConcurrentHashMap.newKeySet()`) |
 | `lastUnreadyReason` | `AbstractStrategy` | `ConcurrentMap<String, String>` |
 | `isFilled` | `BracketOrder.ExitSlice` | `private boolean isFilled = false;` |
@@ -149,6 +149,7 @@ instead. `AbstractStrategy.executeLifecycle(Stock)` reads
 | `owner == null` | `evaluateNewEntry(stock, strategyId)` |
 | `strategyId.equals(owner)` | `handleFlatWithLocalOwnership(stock)` — `cleanupOwnedLifecycle` when the bracket is `null` or `isConfirmedTerminal(...)`, otherwise `escalate(stock, "Stock is FLAT while its local bracket is still non-terminal")` |
 | `owner != null` and not ours | return |
+| `owner == null` and `hasUnfinishedLifecycle(ticker)` | `cleanupOwnedLifecycle(...)` first, then `evaluateNewEntry`. `OrderLifecycleHandler.completeConfirmedFlat` clears the bracket and releases the ticker in one call, so a strategy whose trade the reader thread finished never observes `FLAT` while still owning the symbol — without this the cleanup path is unreachable after any completed trade |
 
 #### PENDING
 
@@ -169,8 +170,15 @@ instead. `AbstractStrategy.executeLifecycle(Stock)` reads
 
 Deriving the state removed the lag that used to make each broker status observable
 exactly once. `acknowledgedStatus` restores that explicitly: the method returns
-immediately when `bracketOrder.getStatus()` equals the recorded value, records the
-new status, and then runs the once-per-transition work.
+immediately when `bracketOrder.getStatus()` **and** `getTradeId()` both equal the
+recorded pair, records the new one, and then runs the once-per-transition work.
+
+Matching on the trade as well as the status is what stops a value left over from an
+earlier trade on the same ticker reading as already acknowledged. A previous order
+that reached `WORKING_PARENT` and then died unfilled leaves that status behind, and
+the next order on the ticker rests at `WORKING_PARENT` too; the engine-wide lock is
+released here and nowhere else for a resting parent, so a single false match parks
+every strategy in the engine until that order fills or terminates.
 
 | Status | Effect |
 |---|---|
@@ -197,6 +205,12 @@ back. Releasing the reservation is what returns the derived state to `FLAT`.
 `AbstractStrategy.rollbackEntryReservation(Stock, EntryAdmission.Reservation)`
 calls `reservation.release()`, removes the ticker from `pendingEntries`,
 `escalatedPendingEntries`, and `acknowledgedStatus`, and cancels any tick stream.
+
+`cleanupOwnedLifecycle(Stock, String, BracketOrder)` clears the three per-ticker maps
+*before* it calls `onPositionClosed(Stock)`, so a strategy hook that throws cannot
+leave the ticker in a state that runs the whole cleanup again on the next poll and
+every poll after it. Both blackboard releases compare the caller against the recorded
+owner, so they are no-ops when the reader thread already released.
 It is invoked from `evaluateNewEntry` when, after the claim is held:
 
 - `!tradingGate.allowsNewEntries() || !marketDataFreshness.areAllFresh(ticker, requiredEntryInputs())`
