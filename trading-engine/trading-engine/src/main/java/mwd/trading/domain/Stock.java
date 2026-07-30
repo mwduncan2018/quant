@@ -2,7 +2,6 @@ package mwd.trading.domain;
 
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.ib.client.Bar;
 import com.ib.client.Contract;
@@ -11,14 +10,57 @@ import com.ib.client.Decimal;
 import mwd.trading.execution.BracketOrder;
 
 public class Stock {
+    /**
+     * Where a symbol sits in the trade lifecycle. This is a <em>derived</em>
+     * value, not a stored one — see {@link #positionStateOf(boolean, BracketOrder)}.
+     */
     public enum PositionState {
-        FLAT, PENDING, OPEN, CLOSING
+        FLAT, PENDING, OPEN
     };
 
-    private final AtomicReference<PositionState> state = new AtomicReference<>(PositionState.FLAT);
+    /**
+     * Computes the lifecycle state from the two things that already know it: the
+     * broker's own view of the order, and whether this ticker is reserved.
+     *
+     * <p>
+     * {@link BracketOrder#getStatus()} is not a copy of the truth; it is written
+     * straight from the IBKR order callbacks, so {@code POSITION_OPEN} exists
+     * because IBKR reported a fill. Storing the lifecycle state alongside it
+     * meant keeping a second copy of the same fact by hand, written by both the
+     * reader thread and the strategy threads, and every moment the two disagreed
+     * was a window the surrounding code had to survive. Deriving it makes
+     * disagreement unrepresentable rather than merely detected.
+     *
+     * <p>
+     * Ownership alone means {@code PENDING}: the entry has been admitted and the
+     * bracket is not built yet. A terminal bracket reads {@code FLAT} even while
+     * the ticker is still reserved, which is what lets the owning strategy notice
+     * the trade finished and release it.
+     */
+    public static PositionState positionStateOf(boolean owned, BracketOrder bracket) {
+        if (bracket != null) {
+            switch (bracket.getStatus()) {
+                case INITIALIZED, WORKING_PARENT:
+                    return PositionState.PENDING;
+                case PARTIAL_PARENT, POSITION_OPEN:
+                    return PositionState.OPEN;
+                case FILLED:
+                    return PositionState.FLAT;
+                case CANCELLED, REJECTED:
+                    // A terminal status that followed a fill leaves a live
+                    // position behind; only a clean terminal is flat.
+                    Decimal filled = bracket.getFilledQuantity();
+                    return (filled == null || filled.isZero())
+                            ? PositionState.FLAT
+                            : PositionState.OPEN;
+            }
+        }
+        return owned ? PositionState.PENDING : PositionState.FLAT;
+    }
 
-    public AtomicReference<PositionState> getState() {
-        return state;
+    /** Convenience for callers that already know whether this ticker is reserved. */
+    public PositionState positionState(boolean owned) {
+        return positionStateOf(owned, activeBracket);
     }
 
     private final String ticker;

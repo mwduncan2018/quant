@@ -216,7 +216,6 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
         assertFalse(laterStrategy.isEntryConditionMet(stock()));
 
         Stock stock = stock();
-        stock.getState().set(Stock.PositionState.OPEN);
         BracketOrder bracketOrder = openBracket(stock);
         assertEquals(95.0, bracketOrder.getSlices().get(0).getStopLossPrice(), 1.0e-9);
 
@@ -231,7 +230,6 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
     @Test
     void theRipcordStillFiresWhenNoProxyDataWasEverReceived() {
         Stock stock = stock();
-        stock.getState().set(Stock.PositionState.OPEN);
         BracketOrder bracketOrder = openBracket(stock);
 
         // Reward has collapsed below 1.2x risk, and nothing was ever received
@@ -297,6 +295,7 @@ class TwoSigmaDownsideOptionsProxyGatingTest {
             slice.setStopLossPrice(95.0);
             slice.setTakeProfitPrice(99.0);
         }
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
         stock.setActiveBracket(bracketOrder);
         assertTrue(blackboard.tryReservePosition(
                 TICKER, TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID));

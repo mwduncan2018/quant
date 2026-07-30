@@ -332,7 +332,7 @@ class OneSigmaUpsideStrategyTest {
         bracketOrder.addSlice(slice);
         stock.setActiveBracket(bracketOrder);
         stock.setPositionSize(Decimal.get(-250));
-        stock.getState().set(Stock.PositionState.OPEN);
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
         blackboard.tryReservePosition(
                 TICKER, OneSigmaUpsideMeanReversionStrategy.STRATEGY_ID);
         return bracketOrder;

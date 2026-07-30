@@ -409,14 +409,12 @@ public class OrderLifecycleHandler {
     }
 
     private void markPositionOpen(BracketOrder bracketOrder, Stock stock) {
-        stock.getState().set(Stock.PositionState.OPEN);
         blackboard.releaseGlobalPending(
                 bracketOrder.getStrategyName(), bracketOrder.getTicker());
     }
 
     private void completeConfirmedFlat(BracketOrder bracketOrder) {
         Stock stock = blackboard.getStock(bracketOrder.getTicker());
-        stock.getState().set(Stock.PositionState.FLAT);
         if (stock.getActiveBracket() == bracketOrder) {
             stock.setActiveBracket(null);
         }

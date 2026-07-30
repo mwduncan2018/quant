@@ -382,7 +382,7 @@ class OneSigmaDownsideStrategyTest {
         bracketOrder.addSlice(slice);
         stock.setActiveBracket(bracketOrder);
         stock.setPositionSize(Decimal.get(250));
-        stock.getState().set(Stock.PositionState.OPEN);
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
         blackboard.tryReservePosition(
                 TICKER, OneSigmaDownsideMeanReversionStrategy.STRATEGY_ID);
         return bracketOrder;

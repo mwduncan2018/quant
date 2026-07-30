@@ -235,8 +235,8 @@ class MarketDataReadinessGatingTest {
             slice.setStopLossPrice(95.0);
             slice.setTakeProfitPrice(98.0);
         }
+        bracketOrder.setStatus(BracketOrder.Status.POSITION_OPEN);
         stock.setActiveBracket(bracketOrder);
-        stock.getState().set(Stock.PositionState.OPEN);
         blackboard.tryReservePosition(TICKER, TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID);
         return bracketOrder;
     }

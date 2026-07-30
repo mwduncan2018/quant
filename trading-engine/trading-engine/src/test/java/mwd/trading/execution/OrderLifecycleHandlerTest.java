@@ -43,7 +43,7 @@ class OrderLifecycleHandlerTest {
 
             Stock stock = fixture.blackboard.getStock(TICKER);
             assertEquals(BracketOrder.Status.CANCELLED, bracket.getStatus());
-            assertEquals(Stock.PositionState.FLAT, stock.getState().get());
+            assertEquals(Stock.PositionState.FLAT, positionState(fixture, stock));
             assertNull(stock.getActiveBracket());
             assertNull(fixture.blackboard.getPositionOwner(TICKER));
             assertNull(fixture.blackboard.getGlobalPendingOwner());
@@ -62,7 +62,7 @@ class OrderLifecycleHandlerTest {
 
             Stock stock = fixture.blackboard.getStock(TICKER);
             assertEquals(BracketOrder.Status.POSITION_OPEN, bracket.getStatus());
-            assertEquals(Stock.PositionState.OPEN, stock.getState().get());
+            assertEquals(Stock.PositionState.OPEN, positionState(fixture, stock));
             assertSame(bracket, stock.getActiveBracket());
             assertEquals(STRATEGY, fixture.blackboard.getPositionOwner(TICKER));
             assertNull(fixture.blackboard.getGlobalPendingOwner());
@@ -81,7 +81,7 @@ class OrderLifecycleHandlerTest {
 
             Stock stock = fixture.blackboard.getStock(TICKER);
             assertEquals(BracketOrder.Status.PARTIAL_PARENT, bracket.getStatus());
-            assertEquals(Stock.PositionState.OPEN, stock.getState().get());
+            assertEquals(Stock.PositionState.OPEN, positionState(fixture, stock));
             assertSame(bracket, stock.getActiveBracket());
             assertEquals(STRATEGY, fixture.blackboard.getPositionOwner(TICKER));
             assertNull(fixture.blackboard.getGlobalPendingOwner());
@@ -89,6 +89,15 @@ class OrderLifecycleHandlerTest {
             assertEquals(EngineMode.MANUAL_INTERVENTION, fixture.tradingGate.getMode());
             assertTrue(fixture.blackboard.getSystemHalted());
         }
+    }
+
+    /**
+     * The lifecycle state is derived, so reading it needs the same two inputs the
+     * engine uses: whether the ticker is reserved, and what the bracket reports.
+     */
+    private static Stock.PositionState positionState(Fixture fixture, Stock stock) {
+        return stock.positionState(
+                fixture.blackboard.getPositionOwner(stock.getTicker()) != null);
     }
 
     private Fixture fixture() throws Exception {
@@ -146,7 +155,6 @@ class OrderLifecycleHandlerTest {
             bracket.registerOrderLeg(PARENT_ID, "PARENT", "TE|trade-1|P", quantity);
             blackboard.getOrderRegistry().register(bracket);
             blackboard.getStock(TICKER).setActiveBracket(bracket);
-            blackboard.getStock(TICKER).getState().set(Stock.PositionState.PENDING);
             assertTrue(blackboard.tryReservePosition(TICKER, STRATEGY));
             assertTrue(blackboard.tryAcquireGlobalPending(STRATEGY, TICKER));
             stateStore.recordIntent(bracket, "BUY");

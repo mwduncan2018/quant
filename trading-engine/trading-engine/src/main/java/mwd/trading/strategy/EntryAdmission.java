@@ -46,7 +46,7 @@ public final class EntryAdmission {
     }
 
     /**
-     * Acquires all three, or returns {@code null} having given back anything it
+     * Acquires both, or returns {@code null} having given back anything it
      * managed to take. Never returns a partially held reservation.
      */
     public Reservation tryAdmit(String strategyId, Stock stock) {
@@ -63,8 +63,9 @@ public final class EntryAdmission {
             return null;
         }
 
-        if (!stock.getState().compareAndSet(
-                Stock.PositionState.FLAT, Stock.PositionState.PENDING)) {
+        if (stock.positionState(true) != Stock.PositionState.PENDING) {
+            // Reserved, but the symbol already carries a live or filled bracket.
+            // Admitting here would open a second position on one ticker.
             blackboard.releasePosition(ticker, strategyId);
             blackboard.releaseGlobalPending(strategyId, ticker);
             return null;
@@ -74,8 +75,8 @@ public final class EntryAdmission {
     }
 
     /**
-     * All three holdings of one admitted entry. Not thread-safe: it is created,
-     * used, and resolved on the strategy thread that acquired it.
+     * Both holdings of one admitted entry. Not thread-safe: it is created, used,
+     * and resolved on the strategy thread that acquired it.
      */
     public static final class Reservation implements AutoCloseable {
         private final Blackboard blackboard;
@@ -100,7 +101,8 @@ public final class EntryAdmission {
         }
 
         /**
-         * Gives all three back and returns the position state to {@code FLAT}.
+         * Gives both holdings back. Releasing the reservation is what returns the
+         * derived state to {@code FLAT}; there is no separate field to reset.
          * Idempotent, and a no-op once {@link #keep()} has been called.
          */
         public void release() {
@@ -108,8 +110,6 @@ public final class EntryAdmission {
                 return;
             }
             resolved = true;
-            stock.getState().compareAndSet(
-                    Stock.PositionState.PENDING, Stock.PositionState.FLAT);
             blackboard.releasePosition(stock.getTicker(), strategyId);
             blackboard.releaseGlobalPending(strategyId, stock.getTicker());
         }
