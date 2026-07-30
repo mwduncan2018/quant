@@ -196,7 +196,7 @@ Open-position management contains break-even adjustments, a VWAP target adjustme
 | Input | Current source | Readiness |
 | --- | --- | --- |
 | Bid, ask, last, mark, OHLC, previous close | IBKR market-data ticks | Wired |
-| Session VWAP | Derived from the minute bars by `DailyVwapTracker` | Wired |
+| Session VWAP | IBKR `RT_VOLUME` string tick (generic tick 233) | Wired; **requires a real-time subscription** |
 | Daily history and simple moving averages | IBKR historical data | Wired |
 | Updating one-minute bars, ATR, RSI, and the minute-volume baseline | IBKR updating historical data | Wired |
 | Account values and margin rates | IBKR account callbacks and what-if orders | Wired |
@@ -227,22 +227,31 @@ subscription opens and effectively never again; an age limit would discard a
 value that stays correct all day. It lapses when the New York date changes or
 when subscriptions are rebuilt.
 
-`DAILY_VWAP` is the one input the engine computes rather than receives. **IBKR
-sends no VWAP price tick.** The figure travels inside `RT_VOLUME` (tick type 48),
-a *string* tick enabled by generic tick `233`, and the delayed field family — 66
-`DELAYED_BID` through 76 `DELAYED_OPEN` — contains no equivalent at all, so a
-delayed subscription can never carry it. `DailyVwapTracker` therefore derives the
-session figure from the minute bars the engine already receives:
+`DAILY_VWAP` is the one input that does not arrive as a price tick. **IBKR sends
+no VWAP price-tick field** — `TickType` runs 0 to 104 and contains none. The
+figure travels inside `RT_VOLUME` (tick type 48), a semicolon-delimited *string*
+tick enabled by generic tick `233`, which `requestLiveMarketData` already
+requests:
 
 ```
-VWAP = Sum(bar.wap * bar.volume) / Sum(bar.volume)
+price;size;time;totalVolume;VWAP;singleTradeFlag
 ```
 
-That works identically on live and delayed data, which is what allows the PAPER
-engine to run on delayed market data. The forming minute is included and replaced
-as it updates, so the value tracks intrabar rather than freezing for up to a
-minute. It will not match the TWS display to the cent — TWS applies its own
-trade-condition filtering — but it follows the same curve.
+`PriceTickHandler.onTickString` reads field five. The payload is rejected unless
+it has at least five fields and the VWAP parses to a positive finite number, so a
+shape change is ignored rather than misread as a price.
+
+**This requires a real-time market-data subscription.** The delayed tick family
+runs 66 `DELAYED_BID` through 76 `DELAYED_OPEN` and has no `RT_VOLUME`
+equivalent, so a delayed feed carries no VWAP at all. Under delayed data
+`DAILY_VWAP` is never recorded and every strategy stays gated out of entry —
+correct behaviour for a value that genuinely is not being received, but it means
+**no orders will be placed until live data is enabled.**
+
+The first accepted `RT_VOLUME` payload per symbol is logged at INFO with the raw
+string alongside the parsed value. The field order above comes from IBKR's
+documentation rather than the `JavaClient` source, so that line makes it a
+five-second check against a real session instead of a standing assumption.
 
 Only handlers record inputs, and only after accepting a value, so a ready input
 carries a real guarantee: a validated number reached the `Blackboard`. The

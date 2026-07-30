@@ -28,7 +28,6 @@ import mwd.trading.marketdata.MinuteBarHandler;
 import mwd.trading.marketdata.PriceTickHandler;
 import mwd.trading.marketdata.SizeTickHandler;
 import mwd.trading.broker.ibkr.callback.BrokerTimeHandler;
-import mwd.trading.indicator.DailyVwapTracker;
 import mwd.trading.indicator.MinuteVolumeTracker;
 
 public class EWrapperRaptor extends EWrapperAbstractBase {
@@ -47,7 +46,6 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 	private final SizeTickHandler sizeTickHandler;
 	private final BrokerTimeHandler brokerTimeHandler;
 	private final MinuteVolumeTracker minuteVolumeTracker;
-	private final DailyVwapTracker dailyVwapTracker;
 	private volatile IbkrSessionManager sessionManager;
 	private volatile MarketDataSubscriptionManager marketDataSubscriptionManager;
 
@@ -65,8 +63,7 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 			PriceTickHandler priceTickHandler,
 			SizeTickHandler sizeTickHandler,
 			BrokerTimeHandler brokerTimeHandler,
-			MinuteVolumeTracker minuteVolumeTracker,
-			DailyVwapTracker dailyVwapTracker) {
+			MinuteVolumeTracker minuteVolumeTracker) {
 		this.registry = registry;
         this.intradayWilderAtrTracker = intradayWilderAtrTracker;
         this.dailyWilderAtrCalculator = dailyWilderAtrCalculator;
@@ -81,7 +78,6 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
         this.sizeTickHandler= sizeTickHandler;
         this.brokerTimeHandler = brokerTimeHandler;
         this.minuteVolumeTracker = minuteVolumeTracker;
-        this.dailyVwapTracker = dailyVwapTracker;
     }
 
 	public void attachLifecycle(
@@ -156,6 +152,11 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 			this.sizeTickHandler.onTickSize(reqId, field, size);
 	}
 
+	@Override public void tickString(int reqId, int tickType, String value) {
+		var consumers = registry.getConsumersFor(reqId);
+		if (consumers.contains(RequestRegistry.DataConsumer.TICK_PRICE))
+			this.priceTickHandler.onTickString(reqId, tickType, value);
+	}
 	@Override public void tickByTickBidAsk(int reqId, long time, double bidPrice,
 	                             double askPrice, Decimal bidSize, Decimal askSize,
 	                             TickAttribBidAsk tickAttribBidAsk) {
@@ -193,8 +194,6 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 			this.minuteVolumeTracker.onHistoricalData(reqId, bar);
 		if (consumers.contains(RequestRegistry.DataConsumer.TICK_BAR))
 			this.minuteBarHandler.onHistoricalData(reqId, bar);
-		if (consumers.contains(RequestRegistry.DataConsumer.VWAP))
-			this.dailyVwapTracker.onHistoricalData(reqId, bar);
 	}
 
 	@Override public void historicalDataEnd(int reqId, String startDate, String endDate) {
@@ -209,8 +208,6 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 			this.rsiTracker.onHistoricalDataEnd(reqId, startDate, endDate);
 		if (consumers.contains(RequestRegistry.DataConsumer.VOLUME))
 			this.minuteVolumeTracker.onHistoricalDataEnd(reqId, startDate, endDate);
-		if (consumers.contains(RequestRegistry.DataConsumer.VWAP))
-			this.dailyVwapTracker.onHistoricalDataEnd(reqId, startDate, endDate);
 	}
 
 	@Override public void historicalDataUpdate(int reqId, Bar bar) {
@@ -223,8 +220,6 @@ public class EWrapperRaptor extends EWrapperAbstractBase {
 			this.minuteVolumeTracker.onHistoricalDataUpdate(reqId, bar);
 		if (consumers.contains(RequestRegistry.DataConsumer.TICK_BAR))
 			this.minuteBarHandler.onHistoricalDataUpdate(reqId, bar);
-		if (consumers.contains(RequestRegistry.DataConsumer.VWAP))
-			this.dailyVwapTracker.onHistoricalDataUpdate(reqId, bar);
 	}
 
 

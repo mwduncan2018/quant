@@ -55,8 +55,8 @@ public class TickMap {
 
 	// There is no isVwap. IBKR defines no VWAP price tick in either the live or
 	// the delayed field set — TickType runs 0 to 104 and neither 459 nor 533,
-	// which this method used to test for, exists. The session figure is derived
-	// from the minute bars by DailyVwapTracker.
+	// which this method used to test for, exists. VWAP arrives as the RT_VOLUME
+	// string tick and is read by PriceTickHandler.onTickString.
 
 	/*
 	 * Tick Size

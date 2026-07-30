@@ -46,7 +46,6 @@ Constructor: `public EWrapperRaptor(RequestRegistry, IntradayWilderAtrTracker, D
 | `sizeTickHandler` | `mwd.trading.marketdata.SizeTickHandler` |
 | `brokerTimeHandler` | `mwd.trading.broker.ibkr.callback.BrokerTimeHandler` |
 | `minuteVolumeTracker` | `mwd.trading.indicator.MinuteVolumeTracker` |
-| `dailyVwapTracker` | `mwd.trading.indicator.DailyVwapTracker` |
 
 Injected after construction via `attachLifecycle`: `volatile IbkrSessionManager sessionManager`, `volatile MarketDataSubscriptionManager marketDataSubscriptionManager`.
 
@@ -67,8 +66,7 @@ public EWrapperRaptor(
         PriceTickHandler priceTickHandler,
         SizeTickHandler sizeTickHandler,
         BrokerTimeHandler brokerTimeHandler,
-        MinuteVolumeTracker minuteVolumeTracker,
-        DailyVwapTracker dailyVwapTracker)
+        MinuteVolumeTracker minuteVolumeTracker)
 
 public void attachLifecycle(IbkrSessionManager sessionManager, MarketDataSubscriptionManager marketDataSubscriptionManager)
 
@@ -81,6 +79,7 @@ public void attachLifecycle(IbkrSessionManager sessionManager, MarketDataSubscri
 
 @Override public void tickPrice(int reqId, int field, double price, TickAttrib attribs)
 @Override public void tickSize(int reqId, int field, Decimal size)
+@Override public void tickString(int reqId, int tickType, String value)
 @Override public void tickByTickBidAsk(int reqId, long time, double bidPrice, double askPrice, Decimal bidSize, Decimal askSize, TickAttribBidAsk tickAttribBidAsk)
 @Override public void tickByTickAllLast(int reqId, int tickType, long time, double price, Decimal size, TickAttribLast tickAttribLast, String exchange, String specialConditions)
 
@@ -114,7 +113,7 @@ public void attachLifecycle(IbkrSessionManager sessionManager, MarketDataSubscri
 
 **Concurrent collections**
 
-Holds no collection of its own. Reads the `ConcurrentHashMap` inside `RequestRegistry` through `registry.getConsumersFor(int)` in: `tickPrice`, `tickSize`, `tickByTickBidAsk`, `tickByTickAllLast`, `historicalData`, `historicalDataEnd`, `historicalDataUpdate`.
+Holds no collection of its own. Reads the `ConcurrentHashMap` inside `RequestRegistry` through `registry.getConsumersFor(int)` in: `tickPrice`, `tickSize`, `tickString`, `tickByTickBidAsk`, `tickByTickAllLast`, `historicalData`, `historicalDataEnd`, `historicalDataUpdate`.
 
 **Centralized state objects**
 
@@ -264,7 +263,7 @@ None. The class declares no constructor.
 ### 3. Method Signatures
 
 Nested types:
-- `public enum DataConsumer { ATR_MINUTE_WILDERS, ATR_DAILY_WILDERS, ERROR, MOVING_AVERAGE, NEXT_VALID_ID, RSI, TICK_BAR, TICK_PRICE, TICK_SIZE, VOLUME, VWAP }`
+- `public enum DataConsumer { ATR_MINUTE_WILDERS, ATR_DAILY_WILDERS, ERROR, MOVING_AVERAGE, NEXT_VALID_ID, RSI, TICK_BAR, TICK_PRICE, TICK_SIZE, VOLUME }`
 - `private static record ReqData(String ticker, EnumSet<DataConsumer> consumers)`
 
 ```java
@@ -303,7 +302,7 @@ No `Blackboard` reference.
 
 ### 1. Class/Interface Responsibilities
 
-Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`. It declares no VWAP predicate: IBKR defines no VWAP price tick in either set.
+Answers whether an IBKR tick field number corresponds to a named price or size field, selecting between the live and delayed field-number sets from a single `boolean liveIBKRData`. It declares no VWAP predicate: IBKR defines no VWAP price tick in either set, and the figure arrives on `tickString` as `RT_VOLUME`.
 
 ### 2. Injected Dependencies
 
