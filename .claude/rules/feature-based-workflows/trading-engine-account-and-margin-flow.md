@@ -6,8 +6,15 @@ paths:
 # Account State and Margin-Rate Flow
 
 Traces two related paths: the IBKR account-update subscription that keeps
-`Account` current, and the `MarginPacer` what-if order cycle that measures
-per-symbol margin rates.
+`Account` current, and the file-backed margin rates that entry sizing multiplies
+against.
+
+Margin rates used to be measured, by a `MarginPacer` what-if order per symbol per
+direction on a five-minute cycle. IBKR asks for at most one what-if per minute and
+one per ten real order submissions; that loop ran at roughly twelve a minute, some
+four and a half thousand per session, and cancelled none of them. It is gone. The
+rates are read off IBKR's public margin calculator into
+`data/universe-reference.csv` and loaded once at startup.
 
 ## 1. Workflow Components
 
@@ -15,20 +22,18 @@ per-symbol margin rates.
 | --- | --- |
 | `mwd.trading.broker.ibkr.IbkrSessionManager` | Resolves the account from `managedAccounts` and issues `reqAccountUpdates`. |
 | `mwd.trading.config.Config` | Supplies `getExpectedAccount()`, read by both the session manager and `BracketOrderExecutor`. |
-| `mwd.trading.broker.ibkr.EWrapperRaptor` | Delivers `managedAccounts`, `updateAccountValue`, `updateAccountTime`, `updatePortfolio`, `accountDownloadEnd`, `position`, `positionEnd`, and the what-if `openOrder`. |
+| `mwd.trading.broker.ibkr.EWrapperRaptor` | Delivers `managedAccounts`, `updateAccountValue`, `updateAccountTime`, `updatePortfolio`, `accountDownloadEnd`, `position`, and `positionEnd`. |
 | `mwd.trading.broker.ibkr.callback.AccountEventHandler` | Writes account values and portfolio values onto `Account` and `Stock`, and stamps the account refresh time. |
 | `mwd.trading.domain.Account` | Holds the account id, `netLiquidation`, `availableFunds`, and the other balances plus `lastRefreshedAtMillis`. |
-| `mwd.trading.state.Blackboard` | Owns the `Account`, allocates order IDs for what-if orders, and answers `isAccountCurrentForNewEntry()` / `recordEntrySubmitted(long)`. |
-| `mwd.trading.risk.MarginPacer` | `Runnable` that submits a `whatIf` BUY and SELL order per `Stock` on a five-minute cycle. |
-| `mwd.trading.lifecycle.TradingGate` | Gates the pacer loop through `allowsNewEntries()`. |
-| `com.ib.client.EClientSocket` | Carries `reqAccountUpdates` and the what-if `placeOrder` calls. |
-| `com.ib.client.Order` | The 100-share market order with `whatIf(true)` used to price margin. |
-| `com.ib.client.OrderState` | Carries `initMarginChange()` back on the what-if `openOrder` callback. |
-| `mwd.trading.execution.OrderLifecycleHandler` | Intercepts `order.whatIf()` in `onOpenOrder` and routes it to `processWhatIf`. |
-| `mwd.trading.domain.Stock` | Receives `setLongMarginRate` / `setShortMarginRate` and the corresponding verified flags, plus the portfolio fields. |
+| `mwd.trading.state.Blackboard` | Owns the `Account` and answers `isAccountCurrentForNewEntry()` / `recordEntrySubmitted(long)`. |
+| `mwd.trading.risk.UniverseReference` | Loads the per-ticker sectors and margin rates, and answers `marginRate(String, boolean)`. |
+| `mwd.trading.risk.MarginMethodology` | Selects which pair of rates in the table applies, `REG_T` or `PORTFOLIO`. |
+| `mwd.trading.risk.ConcentrationLimits` | Caps the sized quantity against per-ticker and per-sector exposure. |
+| `com.ib.client.EClientSocket` | Carries `reqAccountUpdates`. |
+| `mwd.trading.domain.Stock` | Receives the portfolio fields. It no longer holds margin rates. |
 | `mwd.trading.reconciliation.ReconciliationManager` | Receives `position` and `updatePortfolio` payloads alongside the `Stock` writes. |
 | `mwd.trading.strategy.AbstractStrategy` | Reads `blackboard.isAccountCurrentForNewEntry()` before evaluating an entry and calls `recordEntrySubmitted` before submitting one. |
-| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Reads `market.longMarginRateVerified()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, `market.marginRequirement(String, Decimal, double)`, `market.longMarginRate()`. |
+| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Reads `account.getNetLiquidation()`, `account.getAvailableFunds()`, and `universeReference.marginRate(market.ticker(), true)`. |
 
 ## 2. Execution Path
 
@@ -81,46 +86,34 @@ per-symbol margin rates.
     **Receiving Component:** `Blackboard` (`AtomicLong.updateAndGet`)
 
 12. **Initiating Component:** the concrete strategy's `calculateTotalQuantity(MarketSnapshot, double, double)`
-    **Method Invocation:** `blackboard.getAccount()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, `market.marginRequirement("BUY", Decimal, double)`, `market.longMarginRate()` — the rate is the one captured in the snapshot, so the quantity matches the rate the direction was verified against
-    **Receiving Component:** `Account`, `MarketSnapshot`
+    **Method Invocation:** `blackboard.getAccount()`, `account.getNetLiquidation()`, `account.getAvailableFunds()`, then `universeReference.marginRate(market.ticker(), isLong)`; the requirement is `idealShareCount × entryPrice × marginRate`, and exceeding `availableFunds` recomputes an affordable share count at the same rate
+    **Receiving Component:** `Account`, `UniverseReference`
 
-### Margin what-if cycle (`Margin-Pacer-Thread`)
+12a. **Initiating Component:** `AbstractStrategy.evaluateNewEntry(Stock, String)`
+    **Method Invocation:** `concentrationLimits.allowedQuantity(ticker, entryPrice, totalQuantity)`; a smaller allowance is applied through `trimToTotal(...)`, and a total below `MIN_POSITION_NOTIONAL` rolls the reservation back
+    **Receiving Component:** `ConcentrationLimits`
+
+### Margin-rate resolution (main thread, once at startup)
 
 13. **Initiating Component:** `Main.main(String[])`
-    **Method Invocation:** `new MarginPacer(blackboard, sessionManager.client(), tradingGate)` then `new Thread(marginPacer, "Margin-Pacer-Thread").start()`
-    **Receiving Component:** `MarginPacer`
+    **Method Invocation:** `UniverseReference.load(Path.of(config.getUniverseReferencePath()), MarginMethodology.parse(config.getMarginMethodology()), config.getDefaultLongMarginRate(), config.getDefaultShortMarginRate())`
+    **Receiving Component:** `UniverseReference`
 
-14. **Initiating Component:** `MarginPacer.run()`
-    **Method Invocation:** `client.isConnected()` and `tradingGate.allowsNewEntries()`; when either is false it sleeps 1000 ms and re-loops
-    **Receiving Component:** `EClientSocket`, `TradingGate`
+14. **Initiating Component:** `Main.main(String[])`
+    **Method Invocation:** `universeReference.describeCoverage(Set.copyOf(marketDataSymbols), LocalDate.now())` logged line by line — naming every traded symbol with no row and every symbol falling back to the conservative default
+    **Receiving Component:** `Logger`
 
-15. **Initiating Component:** `MarginPacer.run()`
-    **Method Invocation:** `blackboard.forEachStock(Consumer<Stock>)`, invoking `requestWhatIf(stock, "BUY")` and `requestWhatIf(stock, "SELL")` with a 250 ms sleep after each, then `Thread.sleep(Duration.ofMinutes(5))`
-    **Receiving Component:** `Blackboard`, `MarginPacer`
+15. **Initiating Component:** `Main.main(String[])`
+    **Method Invocation:** `universeReference.ageInDays(LocalDate.now())` warned past `config.getUniverseReferenceMaxAgeDays()`; IBKR reprices margin without notice, so an old table is a silent sizing error
+    **Receiving Component:** `Logger`
 
-16. **Initiating Component:** `MarginPacer.requestWhatIf(Stock, String)`
-    **Method Invocation:** builds a `Contract` (`STK`/`SMART`/`USD`) and an `Order` with `orderType("MKT")`, `totalQuantity(Decimal.get(100))`, `whatIf(true)`; then `blackboard.getNextOrderId()` and `client.placeOrder(reqId, contract, mOrder)`
-    **Receiving Component:** `Blackboard`, `EClientSocket`
+16. **Initiating Component:** `Main.main(String[])`
+    **Method Invocation:** `new ConcentrationLimits(blackboard, universeReference, config.getMaxTickerExposurePercent(), config.getMaxSectorExposurePercent(), config.getMinPositionNotional())`, then passed to all three strategies
+    **Receiving Component:** `ConcentrationLimits`
 
-17. **Initiating Component:** `EWrapperRaptor.openOrder(int orderId, Contract contract, Order order, OrderState orderState)`
-    **Method Invocation:** `orderLifecycleHandler.onOpenOrder(...)`, which tests `order.whatIf()` first and calls `processWhatIf(Contract, Order, OrderState)` before any reconciliation or bracket resolution
-    **Receiving Component:** `OrderLifecycleHandler`
-
-18. **Initiating Component:** `OrderLifecycleHandler.processWhatIf(Contract, Order, OrderState)`
-    **Method Invocation:** `blackboard.getStock(contract.symbol())`, `parseMarginChange(orderState.initMarginChange())`, `100 * stock.getLastPrice()` as the notional; a null, blank, unparseable, non-positive, or `Double.MAX_VALUE` margin figure returns without writing, as does a non-positive notional
-    **Receiving Component:** `Blackboard`, `Stock`, `OrderState`
-
-19. **Initiating Component:** `OrderLifecycleHandler.processWhatIf(Contract, Order, OrderState)`
-    **Method Invocation:** `order.action() == Action.BUY` (`com.ib.client.Types.Action`) → `stock.setLongMarginRate(double)` + `stock.setLongMarginRateVerified(true)`; otherwise `stock.setShortMarginRate(double)` + `stock.setShortMarginRateVerified(true)`
-    **Receiving Component:** `Stock`
-
-20. **Initiating Component:** `TwoSigmaDownsideMeanReversionStrategy.isEntryConditionMet(MarketSnapshot)`
-    **Method Invocation:** `market.longMarginRateVerified()`; false blocks the entry
-    **Receiving Component:** `MarketSnapshot`
-
-21. **Initiating Component:** `Trading-Engine-Shutdown` hook thread
-    **Method Invocation:** `marginPacerThread.interrupt()`
-    **Receiving Component:** `MarginPacer`
+17. **Initiating Component:** `BlackboardMonitor.updateDashboardData()` (monitor refresh thread)
+    **Method Invocation:** `universeReference.marginRate(stock.getTicker(), true)` and `(..., false)` for the `L-Margin` and `S-Margin` columns. These now echo configuration rather than reporting what IBKR charged; the stale-date warning is what replaces that signal
+    **Receiving Component:** `UniverseReference`
 
 ## 3. Data Payloads and State Handoffs
 
@@ -129,23 +122,19 @@ per-symbol margin rates.
 - `String accountsList` — the raw comma-separated `managedAccounts` payload, split independently by `AccountEventHandler.onManagedAccounts` and `IbkrSessionManager.accounts(String)`.
 - `Account` — a single instance created inside the `Blackboard` constructor and shared by the handler (writer) and every strategy (reader).
 - `long lastRefreshedAtMillis` on `Account` and `AtomicLong lastEntrySubmittedAtMillis` on `Blackboard` — the pair compared by `isAccountCurrentForNewEntry()`.
-- What-if `com.ib.client.Order` — a 100-share `MKT` order with `whatIf(true)`, submitted under an ID from `getNextOrderId()`, i.e. drawn from the same counter as real orders.
-- `OrderState.initMarginChange()` — a `String` parsed to `double` and divided by the notional to produce the stored rate.
-- `Stock.longMarginRate` / `shortMarginRate` / `longMarginRateVerified` / `shortMarginRateVerified` — `volatile` fields defaulting to `1.0` and `false`; the verified flags are set per direction, never together.
+- `UniverseReference.TickerReference` — immutable record `(ticker, sector, regTLong, regTShort, portfolioLong, portfolioShort)`; a blank rate is `NaN` and falls back to the conservative default.
+- `ConcentrationLimits.Exposure` — immutable record `(netLiquidation, byTicker, bySector, unsectored)`, rebuilt on each `allowedQuantity` call rather than cached, because the reader thread is writing the fields it sums.
 - `Decimal positionSize` on `Stock` — written from both `position` and `updatePortfolio` and read by `BracketOrderExecutor.updateTripleThreatExits` to derive the exit direction.
 
 ### Thread handoffs
 
 | Handoff | Detail |
 | --- | --- |
-| `IBKR-Reader` → `<Strategy>-Thread` | `Account` balances, `Account.lastRefreshedAtMillis`, and the `Stock` margin fields are written on the reader thread and read on the strategy threads. |
+| `IBKR-Reader` → `<Strategy>-Thread` | `Account` balances and `Account.lastRefreshedAtMillis` are written on the reader thread and read on the strategy threads. |
 | `<Strategy>-Thread` → `IBKR-Reader` | `Blackboard.recordEntrySubmitted(long)` is written on a strategy thread and compared against the reader-written refresh timestamp; the write uses `AtomicLong.updateAndGet(previous -> Math.max(previous, atMillis))`. |
-| `Margin-Pacer-Thread` → TWS | `requestWhatIf` calls `EClientSocket.placeOrder` directly from the pacer thread. |
-| TWS → `IBKR-Reader` | The what-if response returns as an `openOrder` callback and is handled inline by `OrderLifecycleHandler.processWhatIf`. |
-| `Margin-Pacer-Thread` ↔ `<Strategy>-Thread` on the ID counter | Both call `Blackboard.getNextOrderId()`, backed by `IdManager`'s `AtomicInteger.getAndIncrement()`. |
-| `Margin-Pacer-Thread` iteration | `blackboard.forEachStock(...)` iterates the `ConcurrentHashMap` values while the reader thread may be inserting new `Stock` entries via `getStock(String)`. |
-| Shutdown hook thread → `Margin-Pacer-Thread` | `interrupt()`, which the pacer's `Thread.sleep` calls convert into loop termination. |
+| main thread → every strategy thread | `UniverseReference` is loaded once and is immutable afterwards, so the rates need no synchronization to publish. |
+| `<Strategy>-Thread` iteration | `ConcentrationLimits.currentExposure()` walks `blackboard.forEachStock(...)` on the strategy thread while the reader thread may be writing `positionSize`, `lastPrice`, and bracket quantities. Each field is `volatile`, so the sum is of individually current values rather than one instant — over-counting a fill in flight is the conservative direction. |
 
-`Account` and every margin-related `Stock` field are `volatile`, which is what
-makes the reader-thread writes visible to the strategy threads without further
-synchronization.
+`Account` fields are `volatile`, which is what makes the reader-thread writes
+visible to the strategy threads without further synchronization. The margin rates
+need none: they are immutable configuration published once at startup.

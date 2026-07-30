@@ -24,9 +24,9 @@ Base class that owns the poll loop over a normalized ticker universe, the dispat
 
 ### 2. Injected Dependencies
 
-Protected constructor: `protected AbstractStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, Set<String>)` — delegates with `Clock.systemUTC()`.
+Protected constructor: `protected AbstractStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, UniverseReference, ConcentrationLimits, Set<String>)` — delegates with `Clock.systemUTC()`.
 
-Protected constructor: `protected AbstractStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, Set<String>, Clock)`
+Protected constructor: `protected AbstractStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, UniverseReference, ConcentrationLimits, Set<String>, Clock)`
 
 | Parameter | Exact type |
 | --- | --- |
@@ -36,6 +36,8 @@ Protected constructor: `protected AbstractStrategy(StrategyBlackboard, BracketOr
 | `config` | `mwd.trading.config.Config` |
 | `tradingGate` | `mwd.trading.lifecycle.TradingGate` |
 | `marketDataFreshness` | `mwd.trading.marketdata.MarketDataFreshness` |
+| `universeReference` | `mwd.trading.risk.UniverseReference` — per-ticker sectors and margin rates, configuration rather than measurement |
+| `concentrationLimits` | `mwd.trading.risk.ConcentrationLimits` — account-level caps that reduce, but never raise, a strategy's own sizing |
 | `universe` | `java.util.Set<java.lang.String>` (trimmed, upper-cased, stored as `Set.copyOf(...)`; empty throws `IllegalArgumentException`) |
 | `clock` | `java.time.Clock` |
 
@@ -47,8 +49,8 @@ constructor also builds `private final EntryAdmission entryAdmission = new Entry
 Nested type: `private record PendingEntry(long submittedAtMillis)`
 
 ```java
-protected AbstractStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, Set<String> universe)
-protected AbstractStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, Set<String> universe, Clock clock)
+protected AbstractStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, Set<String> universe)
+protected AbstractStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, Set<String> universe, Clock clock)
 
 @Override public final void run()
 final void runOneCycle()
@@ -74,6 +76,7 @@ private boolean acknowledgementTimedOut(long submittedAtMillis)
 private void escalate(Stock stock, String message)
 private String strategyId()
 private TradeDirection tradeDirection()
+static List<BracketOrderExecutor.SliceIntent> trimToTotal(List<BracketOrderExecutor.SliceIntent> sliceIntents, Decimal requested, Decimal allowed)
 private static Decimal totalQuantity(List<BracketOrderExecutor.SliceIntent> sliceIntents)
 private static boolean isZero(Decimal quantity)
 private static boolean isConfirmedTerminal(BracketOrder.Status status)
@@ -95,7 +98,7 @@ Every hook that reads market data takes a `MarketSnapshot`; `Stock` is passed on
 identity or lifecycle is needed. `manageOpenPosition` takes both, because it reads the
 active bracket and calls `updateExits`.
 
-Protected fields available to subclasses: `logger` (`Logger`), `blackboard` (`StrategyBlackboard`), `bracketOrderGateway` (`BracketOrderGateway`), `tickStreamController` (`TickStreamController`), `config` (`Config`), `tradingGate` (`TradingGate`), `marketDataFreshness` (`MarketDataFreshness`).
+Protected fields available to subclasses: `logger` (`Logger`), `blackboard` (`StrategyBlackboard`), `universeReference` (`UniverseReference`), `concentrationLimits` (`ConcentrationLimits`), `bracketOrderGateway` (`BracketOrderGateway`), `tickStreamController` (`TickStreamController`), `config` (`Config`), `tradingGate` (`TradingGate`), `marketDataFreshness` (`MarketDataFreshness`).
 
 ### 4. Global State Interactions
 
@@ -128,7 +131,8 @@ Protected fields available to subclasses: `logger` (`Logger`), `blackboard` (`St
 | `runOneCycle()` | Reads `blackboard.getStock(ticker)` for each universe member |
 | `executeLifecycle(Stock)` | Reads `blackboard.getPositionOwner(String)`, then dispatches on `stock.positionState(owner != null)` |
 | `acknowledgeStatusChange(Stock, String)` | Reads `stock.getActiveBracket()` and its `getStatus()` / `getFilledQuantity()`; on `WORKING_PARENT`, `PARTIAL_PARENT`, `POSITION_OPEN`, and terminal-with-fill mutates `blackboard.releaseGlobalPending(...)` |
-| `evaluateNewEntry(Stock, String)` | Reads `tradingGate.allowsNewEntries()`, `stock.isTradeable()`, `blackboard.isAccountCurrentForNewEntry()`; takes two `MarketSnapshot` views via `snapshot(Stock)`; delegates the three-step claim to `entryAdmission.tryAdmit(...)`; mutates `blackboard.recordEntrySubmitted(long)`; calls `bracketOrderGateway.placeTripleThreat(...)`; resolves the reservation with `keep()` or `rollbackEntryReservation(...)`, and the try-with-resources `close()` releases any path that did neither |
+| `evaluateNewEntry(Stock, String)` | Reads `tradingGate.allowsNewEntries()`, `stock.isTradeable()`, `blackboard.isAccountCurrentForNewEntry()`; takes two `MarketSnapshot` views via `snapshot(Stock)`; delegates the three-step claim to `entryAdmission.tryAdmit(...)`; calls `concentrationLimits.allowedQuantity(...)` and, when that is smaller, `trimToTotal(...)`; mutates `blackboard.recordEntrySubmitted(long)`; calls `bracketOrderGateway.placeTripleThreat(...)`; resolves the reservation with `keep()` or `rollbackEntryReservation(...)`, and the try-with-resources `close()` releases any path that did neither |
+| `trimToTotal(List, Decimal, Decimal)` | Pure function over the slice intents. Scales each proportionally and gives the rounding loss to the first, because `BracketOrderExecutor.validateEntryIntent` requires the parts to sum exactly to the parent. Returns an empty list when any slice would round to zero: the strategy chose how many exits the position has, and shipping fewer would hand it a shape it never asked for |
 | `handlePendingEntry(Stock)` | Reads `stock.getActiveBracket()` and the clock only; no state writes beyond `escalate` |
 | `handleFlatWithLocalOwnership(Stock)` | Reads `stock.getActiveBracket()`; calls `cleanupOwnedLifecycle` or `escalate` |
 | `cleanupOwnedLifecycle(...)` | Calls `onPositionClosed(Stock)`; mutates `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)`, `stock.setActiveBracket(null)`; calls `tickStreamController.isStreamActive/cancelStream` |
@@ -212,7 +216,7 @@ Concrete `AbstractStrategy` for the strategy ID `TWO_SIGMA_DOWNSIDE` and `TradeD
 
 ### 2. Injected Dependencies
 
-Public constructor: `public TwoSigmaDownsideMeanReversionStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, OptionsIndicatorStore, EarningsStore, MarketCalendarStore)` — delegates with `Clock.systemUTC()`.
+Public constructor: `public TwoSigmaDownsideMeanReversionStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, UniverseReference, ConcentrationLimits, OptionsIndicatorStore, EarningsStore, MarketCalendarStore)` — delegates with `Clock.systemUTC()`.
 
 Package-private constructor adds a trailing `Clock clock`.
 
@@ -224,6 +228,8 @@ Package-private constructor adds a trailing `Clock clock`.
 | `config` | `mwd.trading.config.Config` |
 | `tradingGate` | `mwd.trading.lifecycle.TradingGate` |
 | `marketDataFreshness` | `mwd.trading.marketdata.MarketDataFreshness` |
+| `universeReference` | `mwd.trading.risk.UniverseReference` |
+| `concentrationLimits` | `mwd.trading.risk.ConcentrationLimits` |
 | `optionsIndicatorStore` | `mwd.trading.optionsproxy.OptionsIndicatorStore` (null-checked) |
 | `earningsStore` | `mwd.trading.earnings.EarningsStore` (null-checked) |
 | `marketCalendarStore` | `mwd.trading.calendar.MarketCalendarStore` (null-checked) |
@@ -236,8 +242,8 @@ Static fields: `public static final String STRATEGY_ID = "TWO_SIGMA_DOWNSIDE"`, 
 ### 3. Method Signatures
 
 ```java
-public TwoSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, OptionsIndicatorStore optionsIndicatorStore, EarningsStore earningsStore, MarketCalendarStore marketCalendarStore)
-TwoSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, OptionsIndicatorStore optionsIndicatorStore, EarningsStore earningsStore, MarketCalendarStore marketCalendarStore, Clock clock)
+public TwoSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, OptionsIndicatorStore optionsIndicatorStore, EarningsStore earningsStore, MarketCalendarStore marketCalendarStore)
+TwoSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, OptionsIndicatorStore optionsIndicatorStore, EarningsStore earningsStore, MarketCalendarStore marketCalendarStore, Clock clock)
 
 private LocalDate currentTradingDate()
 
@@ -265,11 +271,11 @@ None of its own; `ENTRY_INPUTS` and `MANAGEMENT_INPUTS` are immutable `Set.of(..
 
 | Method | Interaction |
 | --- | --- |
-| `isEntryConditionMet(MarketSnapshot)` | Reads `market.longMarginRateVerified()`, `lastPrice()`, `previousClose()`, `dailyVWAP()`, `lastMinuteBar()`, `lastMinuteVolume()`, `averageLast15MinuteVolume()`; reads `marketCalendarStore.isWithinOfClose(...)` and `sessionClose(...)`; reads `optionsIndicatorStore.impliedMoveForNewEntry(...)` and `gammaFlipForNewEntry(...)`; reads `blackboard.getStock("SPY")` and `marketDataFreshness.isFresh("SPY", LAST_PRICE)`; calls `isInEarningsBlackout(...)` |
+| `isEntryConditionMet(MarketSnapshot)` | Reads `lastPrice()`, `previousClose()`, `dailyVWAP()`, `lastMinuteBar()`, `lastMinuteVolume()`, `averageLast15MinuteVolume()`; reads `marketCalendarStore.isWithinOfClose(...)` and `sessionClose(...)`; reads `optionsIndicatorStore.impliedMoveForNewEntry(...)` and `gammaFlipForNewEntry(...)`; reads `blackboard.getStock("SPY")` and `marketDataFreshness.isFresh("SPY", LAST_PRICE)`; calls `isInEarningsBlackout(...)` |
 | `isInEarningsBlackout(String, LocalDate)` | Reads `earningsStore.earningsDate(...)`; reads `marketCalendarStore.nextSession(...)` and `previousSessionApproximate(...)` |
 | `calculateEntryPrice(MarketSnapshot)` | Reads `optionsIndicatorStore.lastKnownImpliedMove(...)` and `market.previousClose()` |
 | `calculateSliceIntents(MarketSnapshot, double)` | Reads `optionsIndicatorStore.lastKnownImpliedMove(...)`, `market.dailyVWAP()`; calls `calculateTimeExit()` and `calculateTotalQuantity(...)` |
-| `calculateTotalQuantity(...)` | Reads `blackboard.getAccount().getNetLiquidation()` and `getAvailableFunds()`; reads `market.marginRequirement(...)` and `market.longMarginRate()` |
+| `calculateTotalQuantity(...)` | Reads `blackboard.getAccount().getNetLiquidation()` and `getAvailableFunds()`; reads `universeReference.marginRate(market.ticker(), true)` |
 | `calculateTimeExit()` | Reads `marketCalendarStore.sessionClose(...)` |
 | `evaluateTickStreamNeed(MarketSnapshot, double)` | Reads `market.lastPrice()`; reads and mutates `tickStreamController.isStreamActive/tryRequestStream/cancelStream` (the `ConcurrentHashMap` and `AtomicInteger` inside `TickByTickManager`) |
 | `manageOpenPosition(Stock, MarketSnapshot)` | Reads `stock.getActiveBracket()` and `market.lastPrice()`, `market.dailyVWAP()`, `market.previousClose()`; reads `optionsIndicatorStore.lastKnownImpliedMove(...)`; mutates `ExitSlice` state via `setLastModificationTime(long)`; calls the inherited `updateExits(...)` |
@@ -286,7 +292,7 @@ Concrete `AbstractStrategy` for the strategy ID `ONE_SIGMA_DOWNSIDE` and `TradeD
 
 ### 2. Injected Dependencies
 
-Public constructor: `public OneSigmaDownsideMeanReversionStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, OptionsIndicatorStore, MarketCalendarStore)` — delegates with `Clock.systemUTC()`.
+Public constructor: `public OneSigmaDownsideMeanReversionStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, UniverseReference, ConcentrationLimits, OptionsIndicatorStore, MarketCalendarStore)` — delegates with `Clock.systemUTC()`.
 
 Package-private constructor adds a trailing `Clock clock`.
 
@@ -298,6 +304,8 @@ Package-private constructor adds a trailing `Clock clock`.
 | `config` | `mwd.trading.config.Config` |
 | `tradingGate` | `mwd.trading.lifecycle.TradingGate` |
 | `marketDataFreshness` | `mwd.trading.marketdata.MarketDataFreshness` |
+| `universeReference` | `mwd.trading.risk.UniverseReference` |
+| `concentrationLimits` | `mwd.trading.risk.ConcentrationLimits` |
 | `optionsIndicatorStore` | `mwd.trading.optionsproxy.OptionsIndicatorStore` (null-checked) |
 | `marketCalendarStore` | `mwd.trading.calendar.MarketCalendarStore` (null-checked) |
 | `clock` | `java.time.Clock` (stored as `newYorkClock = clock.withZone(NEW_YORK_ZONE)`) |
@@ -309,8 +317,8 @@ Static fields: `public static final String STRATEGY_ID = "ONE_SIGMA_DOWNSIDE"`, 
 ### 3. Method Signatures
 
 ```java
-public OneSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore)
-OneSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore, Clock clock)
+public OneSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore)
+OneSigmaDownsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore, Clock clock)
 
 private LocalDate currentTradingDate()
 
@@ -348,10 +356,10 @@ private Decimal calculateTotalQuantity(MarketSnapshot market, double entryPrice,
 
 | Method | Interaction |
 | --- | --- |
-| `isEntryConditionMet(MarketSnapshot)` | Reads `market.longMarginRateVerified()`, `lastPrice()`, `previousClose()`, `dailyVWAP()`; reads `marketCalendarStore.sessionClose(...)` and `isWithinOfClose(...)`; reads `optionsIndicatorStore.impliedMoveForNewEntry(...)` |
+| `isEntryConditionMet(MarketSnapshot)` | Reads `lastPrice()`, `previousClose()`, `dailyVWAP()`; reads `marketCalendarStore.sessionClose(...)` and `isWithinOfClose(...)`; reads `optionsIndicatorStore.impliedMoveForNewEntry(...)` |
 | `calculateEntryPrice(MarketSnapshot)` | Reads `optionsIndicatorStore.lastKnownImpliedMove(...)` and `market.previousClose()` |
 | `calculateSliceIntents(MarketSnapshot, double)` | Reads `optionsIndicatorStore.lastKnownImpliedMove(...)`, `market.previousClose()`, `market.dailyVWAP()`; calls `calculateTimeExit()` and `calculateTotalQuantity(...)` |
-| `calculateTotalQuantity(...)` | Reads `blackboard.getAccount().getNetLiquidation()` and `getAvailableFunds()`; reads `market.marginRequirement("BUY", ...)` and `market.longMarginRate()` |
+| `calculateTotalQuantity(...)` | Reads `blackboard.getAccount().getNetLiquidation()` and `getAvailableFunds()`; reads `universeReference.marginRate(market.ticker(), true)` |
 | `calculateTimeExit()` | Reads `marketCalendarStore.sessionClose(...)` |
 | `evaluateTickStreamNeed(MarketSnapshot, double)` | Empty body; no state interaction |
 | `manageOpenPosition(Stock, MarketSnapshot)` | Reads `stock.getActiveBracket()` and `market.dailyVWAP()`; calls the inherited `updateExits(...)` |
@@ -368,7 +376,7 @@ Concrete `AbstractStrategy` for the strategy ID `ONE_SIGMA_UPSIDE` and `TradeDir
 
 ### 2. Injected Dependencies
 
-Public constructor: `public OneSigmaUpsideMeanReversionStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, OptionsIndicatorStore, MarketCalendarStore)` — delegates with `Clock.systemUTC()`.
+Public constructor: `public OneSigmaUpsideMeanReversionStrategy(StrategyBlackboard, BracketOrderGateway, TickStreamController, Config, TradingGate, MarketDataFreshness, UniverseReference, ConcentrationLimits, OptionsIndicatorStore, MarketCalendarStore)` — delegates with `Clock.systemUTC()`.
 
 Package-private constructor adds a trailing `Clock clock`.
 
@@ -380,6 +388,8 @@ Package-private constructor adds a trailing `Clock clock`.
 | `config` | `mwd.trading.config.Config` |
 | `tradingGate` | `mwd.trading.lifecycle.TradingGate` |
 | `marketDataFreshness` | `mwd.trading.marketdata.MarketDataFreshness` |
+| `universeReference` | `mwd.trading.risk.UniverseReference` |
+| `concentrationLimits` | `mwd.trading.risk.ConcentrationLimits` |
 | `optionsIndicatorStore` | `mwd.trading.optionsproxy.OptionsIndicatorStore` (null-checked) |
 | `marketCalendarStore` | `mwd.trading.calendar.MarketCalendarStore` (null-checked) |
 | `clock` | `java.time.Clock` (stored as `newYorkClock = clock.withZone(NEW_YORK_ZONE)`) |
@@ -391,8 +401,8 @@ Static fields: `public static final String STRATEGY_ID = "ONE_SIGMA_UPSIDE"`, `N
 ### 3. Method Signatures
 
 ```java
-public OneSigmaUpsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore)
-OneSigmaUpsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore, Clock clock)
+public OneSigmaUpsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore)
+OneSigmaUpsideMeanReversionStrategy(StrategyBlackboard blackboard, BracketOrderGateway bracketOrderGateway, TickStreamController tickStreamController, Config config, TradingGate tradingGate, MarketDataFreshness marketDataFreshness, UniverseReference universeReference, ConcentrationLimits concentrationLimits, OptionsIndicatorStore optionsIndicatorStore, MarketCalendarStore marketCalendarStore, Clock clock)
 
 private LocalDate currentTradingDate()
 
@@ -430,10 +440,10 @@ private Decimal calculateTotalQuantity(MarketSnapshot market, double entryPrice,
 
 | Method | Interaction |
 | --- | --- |
-| `isEntryConditionMet(MarketSnapshot)` | Reads `market.shortMarginRateVerified()`, `lastPrice()`, `previousClose()`, `dailyVWAP()`; reads `marketCalendarStore.sessionClose(...)` and `isWithinOfClose(...)`; reads `optionsIndicatorStore.impliedMoveForNewEntry(...)` |
+| `isEntryConditionMet(MarketSnapshot)` | Reads `lastPrice()`, `previousClose()`, `dailyVWAP()`; reads `marketCalendarStore.sessionClose(...)` and `isWithinOfClose(...)`; reads `optionsIndicatorStore.impliedMoveForNewEntry(...)` |
 | `calculateEntryPrice(MarketSnapshot)` | Reads `optionsIndicatorStore.lastKnownImpliedMove(...)` and `market.previousClose()` |
 | `calculateSliceIntents(MarketSnapshot, double)` | Reads `optionsIndicatorStore.lastKnownImpliedMove(...)`, `market.previousClose()`, `market.dailyVWAP()`; calls `calculateTimeExit()` and `calculateTotalQuantity(...)` |
-| `calculateTotalQuantity(...)` | Reads `blackboard.getAccount().getNetLiquidation()` and `getAvailableFunds()`; reads `market.marginRequirement("SELL", ...)` and `market.shortMarginRate()` |
+| `calculateTotalQuantity(...)` | Reads `blackboard.getAccount().getNetLiquidation()` and `getAvailableFunds()`; reads `universeReference.marginRate(market.ticker(), false)` |
 | `calculateTimeExit()` | Reads `marketCalendarStore.sessionClose(...)` |
 | `evaluateTickStreamNeed(MarketSnapshot, double)` | Empty body; no state interaction |
 | `manageOpenPosition(Stock, MarketSnapshot)` | Reads `stock.getActiveBracket()` and `market.dailyVWAP()`; calls the inherited `updateExits(...)` |

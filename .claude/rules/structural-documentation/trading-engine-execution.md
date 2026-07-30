@@ -293,11 +293,9 @@ public void onCompletedOrder(Contract contract, Order order, OrderState orderSta
 public void onCompletedOrdersEnd()
 public void onOrderBound(long permanentIdentifier, int apiClientIdentifier, int apiOrderIdentifier)
 
-private void processWhatIf(Contract contract, Order order, OrderState orderState)
-static double parseMarginChange(String reported)
 private void validateExitSlice(int orderIdentifier, Order order, BracketOrder bracketOrder)
 private BracketOrder resolveBracket(int apiOrderId, long permanentId, String orderReference)
-private void markPositionOpen(BracketOrder bracketOrder, Stock stock)
+private void markPositionOpen(BracketOrder bracketOrder)
 private void completeConfirmedFlat(BracketOrder bracketOrder)
 private void persist(BracketOrder bracketOrder)
 private void halt(String reason)
@@ -325,8 +323,7 @@ Holds none. Every lookup and identity write goes through the `ConcurrentHashMap`
 | `onCompletedOrdersEnd()` | Calls `reconciliationManager.onCompletedOrdersEnd()` |
 | `onOrderBound(...)` | Mutates `blackboard.getOrderRegistry().recordBrokerIdentity(...)` |
 | `onCommissionAndFeesReport(CommissionAndFeesReport)` | No state interaction; empty body with a comment |
-| `processWhatIf(...)` | Reads `blackboard.getStock(symbol)`; mutates `stock.setLongMarginRate`/`setLongMarginRateVerified` or `setShortMarginRate`/`setShortMarginRateVerified`. Returns without writing when `parseMarginChange` yields `NaN`, leaving the rate at its 1.0 default and the direction unverified |
-| `markPositionOpen(BracketOrder, Stock)` | Mutates `blackboard.releaseGlobalPending(String, String)`. It writes no position state: the `OPEN` reading follows from the `Status` the caller set on the bracket |
+| `markPositionOpen(BracketOrder)` | Mutates `blackboard.releaseGlobalPending(String, String)`. It writes no position state: the `OPEN` reading follows from the `Status` the caller set on the bracket |
 | `completeConfirmedFlat(BracketOrder)` | Reads `blackboard.getStock(String)`; mutates `stock.setActiveBracket(null)` when it still points at this bracket, `blackboard.releaseGlobalPending(...)`, `blackboard.releasePosition(...)`. The `FLAT` reading follows from the terminal `Status` and the cleared bracket |
 | `persist(BracketOrder)` | Calls `stateStore.recordBrokerUpdate(BracketOrder, String)` |
 | `halt(String)` | Mutates `blackboard.setSystemHalted(true)` and `tradingGate.requireManualIntervention(String)` |

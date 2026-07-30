@@ -19,11 +19,12 @@ Swing `JFrame` that renders a 32-column `JTable` of per-`Stock` values plus an a
 
 ### 2. Injected Dependencies
 
-Constructor: `public BlackboardMonitor(Blackboard blackboard)`
+Constructor: `public BlackboardMonitor(Blackboard blackboard, UniverseReference universeReference)`
 
 | Parameter | Exact type |
 | --- | --- |
 | `blackboard` | `mwd.trading.state.Blackboard` |
+| `universeReference` | `mwd.trading.risk.UniverseReference` — the source of the `L-Margin` and `S-Margin` columns |
 
 Constructed inside the constructor: `tableModel` (`DefaultTableModel`), `monitorTable` (`JTable`), `headerPanel` (`JPanel`), `haltStatusLabel`/`updateRequiredLabel`/`marketTimeLabel` (`JLabel`), `view1Button`/`view2Button`/`viewAllButton` (`JButton`), `systemStatusFadeTimer` (`javax.swing.Timer`, 50 ms), an unnamed repaint `Timer` (33 ms), and the data-refresh daemon thread.
 
@@ -34,7 +35,7 @@ Nested types:
 - `private class FlashCellRenderer extends DefaultTableCellRenderer`
 
 ```java
-public BlackboardMonitor(Blackboard blackboard)
+public BlackboardMonitor(Blackboard blackboard, UniverseReference universeReference)
 
 private void updateView(ViewState targetViewState)
 private void applyColumnVisibility()
@@ -75,7 +76,7 @@ Fields include `private final int refreshRateMilliseconds = 250`, `private stati
 | Method | Interaction |
 | --- | --- |
 | `performSystemStatusFade()` | Reads `blackboard.getSystemHalted()` and `blackboard.getSystemUpdateRequired()` |
-| `updateDashboardData()` | Reads `blackboard.getSystemHalted()`, `blackboard.getSystemUpdateRequired()`, `blackboard.getAccount()` (net liquidation, total cash, settled cash, buying power, available funds, excess margin, realized PnL, unrealized PnL, cushion), `blackboard.getMarketTime()`, and the stock collection via `blackboard.forEachStock(stockList::add)`; reads per-`Stock` price, position, PnL, active `BracketOrder` slices, implied move, gamma flip, VWAP, volumes, ATRs, SMAs, RSI, margin rates, and next earnings date |
+| `updateDashboardData()` | Reads `blackboard.getSystemHalted()`, `blackboard.getSystemUpdateRequired()`, `blackboard.getAccount()` (net liquidation, total cash, settled cash, buying power, available funds, excess margin, realized PnL, unrealized PnL, cushion), `blackboard.getMarketTime()`, and the stock collection via `blackboard.forEachStock(stockList::add)`; reads per-`Stock` price, position, PnL, active `BracketOrder` slices, implied move, gamma flip, VWAP, volumes, ATRs, SMAs, RSI, and next earnings date; the two margin columns read `universeReference.marginRate(ticker, isLong)`, which is configuration rather than a measured figure |
 | `startDataRefreshThread()` | Starts a daemon thread that calls `updateDashboardData()` every 250 ms |
 
 All reads are read-only; this class performs no mutation of `Blackboard`, `Stock`, `Account`, or `BracketOrder` state.
