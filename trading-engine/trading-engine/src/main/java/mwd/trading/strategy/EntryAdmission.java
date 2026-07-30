@@ -3,7 +3,7 @@ package mwd.trading.strategy;
 import java.util.Objects;
 
 import mwd.trading.domain.Stock;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.PositionLedger;
 
 /**
  * The three-step gate every new entry passes through, and the only place that
@@ -39,10 +39,10 @@ import mwd.trading.state.Blackboard;
  * every strategy indefinitely.
  */
 public final class EntryAdmission {
-    private final Blackboard blackboard;
+    private final PositionLedger positions;
 
-    public EntryAdmission(Blackboard blackboard) {
-        this.blackboard = Objects.requireNonNull(blackboard, "blackboard");
+    public EntryAdmission(PositionLedger positions) {
+        this.positions = Objects.requireNonNull(positions, "positions");
     }
 
     /**
@@ -54,24 +54,24 @@ public final class EntryAdmission {
         Objects.requireNonNull(stock, "stock");
         String ticker = stock.getTicker();
 
-        if (!blackboard.tryAcquireGlobalPending(strategyId, ticker)) {
+        if (!positions.tryAcquireGlobalPending(strategyId, ticker)) {
             return null;
         }
 
-        if (!blackboard.tryReservePosition(ticker, strategyId)) {
-            blackboard.releaseGlobalPending(strategyId, ticker);
+        if (!positions.tryReservePosition(ticker, strategyId)) {
+            positions.releaseGlobalPending(strategyId, ticker);
             return null;
         }
 
         if (stock.positionState(true) != Stock.PositionState.PENDING) {
             // Reserved, but the symbol already carries a live or filled bracket.
             // Admitting here would open a second position on one ticker.
-            blackboard.releasePosition(ticker, strategyId);
-            blackboard.releaseGlobalPending(strategyId, ticker);
+            positions.releasePosition(ticker, strategyId);
+            positions.releaseGlobalPending(strategyId, ticker);
             return null;
         }
 
-        return new Reservation(blackboard, strategyId, stock);
+        return new Reservation(positions, strategyId, stock);
     }
 
     /**
@@ -79,13 +79,13 @@ public final class EntryAdmission {
      * and resolved on the strategy thread that acquired it.
      */
     public static final class Reservation implements AutoCloseable {
-        private final Blackboard blackboard;
+        private final PositionLedger positions;
         private final String strategyId;
         private final Stock stock;
         private boolean resolved;
 
-        private Reservation(Blackboard blackboard, String strategyId, Stock stock) {
-            this.blackboard = blackboard;
+        private Reservation(PositionLedger positions, String strategyId, Stock stock) {
+            this.positions = positions;
             this.strategyId = strategyId;
             this.stock = stock;
         }
@@ -110,8 +110,8 @@ public final class EntryAdmission {
                 return;
             }
             resolved = true;
-            blackboard.releasePosition(stock.getTicker(), strategyId);
-            blackboard.releaseGlobalPending(strategyId, stock.getTicker());
+            positions.releasePosition(stock.getTicker(), strategyId);
+            positions.releaseGlobalPending(strategyId, stock.getTicker());
         }
 
         /** Releases unless the entry was kept, so an unconsidered path cannot leak the lock. */

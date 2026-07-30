@@ -5,20 +5,20 @@ import org.apache.logging.log4j.Logger;
 
 import com.ib.client.Bar;
 
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import mwd.trading.domain.Stock;
 import mwd.trading.broker.ibkr.RequestRegistry;
 
 public class MinuteBarHandler {
 	private static final Logger logger = LogManager.getLogger(MinuteBarHandler.class);
 
-	private final Blackboard blackboard;
+	private final StockLookup stocks;
 	private final RequestRegistry registry;
 	private final MarketDataInputStore inputStore;
 
 	public MinuteBarHandler(
-			Blackboard blackboard, RequestRegistry registry, MarketDataInputStore inputStore) {
-		this.blackboard = blackboard;
+			StockLookup stocks, RequestRegistry registry, MarketDataInputStore inputStore) {
+		this.stocks = stocks;
 		this.registry = registry;
 		this.inputStore = inputStore;
 	}
@@ -36,7 +36,7 @@ public class MinuteBarHandler {
 		if (ticker == null || !isUsable(bar)) {
 			return;
 		}
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 		stock.setLastMinuteBar(bar);
 		inputStore.record(ticker, MarketDataInput.MINUTE_BAR);
 	}

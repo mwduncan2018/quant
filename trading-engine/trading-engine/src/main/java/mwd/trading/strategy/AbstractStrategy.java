@@ -27,13 +27,13 @@ import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StrategyBlackboard;
 
 public abstract class AbstractStrategy implements Runnable {
     private record PendingEntry(long submittedAtMillis) {}
 
     protected final Logger logger = LogManager.getLogger(getClass());
-    protected final Blackboard blackboard;
+    protected final StrategyBlackboard blackboard;
     protected final BracketOrderGateway bracketOrderGateway;
     protected final TickStreamController tickStreamController;
     protected final Config config;
@@ -61,7 +61,7 @@ public abstract class AbstractStrategy implements Runnable {
             new ConcurrentHashMap<>();
 
     protected AbstractStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -80,7 +80,7 @@ public abstract class AbstractStrategy implements Runnable {
     }
 
     protected AbstractStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,

@@ -29,7 +29,7 @@ import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StrategyBlackboard;
 
 /**
  * The short mirror of {@link OneSigmaDownsideMeanReversionStrategy}, built to
@@ -121,7 +121,7 @@ public class OneSigmaUpsideMeanReversionStrategy extends AbstractStrategy {
     private final Map<String, Instant> lastTakeProfitUpdate = new ConcurrentHashMap<>();
 
     public OneSigmaUpsideMeanReversionStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -135,7 +135,7 @@ public class OneSigmaUpsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     OneSigmaUpsideMeanReversionStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,

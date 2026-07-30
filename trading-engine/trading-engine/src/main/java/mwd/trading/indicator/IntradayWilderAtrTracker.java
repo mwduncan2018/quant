@@ -3,7 +3,7 @@ package mwd.trading.indicator;
 import com.ib.client.Bar;
 import com.ib.client.Decimal;
 import mwd.trading.broker.ibkr.RequestRegistry;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import mwd.trading.domain.Stock;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -17,15 +17,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public class IntradayWilderAtrTracker {
     private static final Logger logger = 
         LogManager.getLogger(IntradayWilderAtrTracker.class);
-    private final Blackboard blackboard;
+    private final StockLookup stocks;
     private final RequestRegistry registry;
     private final Map<Integer, List<Bar>> historyBuffer = 
         new ConcurrentHashMap<>();
     private final int period = 14;
 
-    public IntradayWilderAtrTracker(Blackboard blackboard, 
+    public IntradayWilderAtrTracker(StockLookup stocks, 
                                    RequestRegistry registry) {
-        this.blackboard = blackboard;
+        this.stocks = stocks;
         this.registry = registry;
     }
 
@@ -60,7 +60,7 @@ public class IntradayWilderAtrTracker {
         String ticker = registry.getTickerFor(requestId);
         if (ticker == null || minuteBars == null) return;
 
-        Stock stock = blackboard.getStock(ticker);
+        Stock stock = stocks.getStock(ticker);
 
         // Calculate and update each required ATR factor
         updateATR(stock, minuteBars, 4, action, start, end);

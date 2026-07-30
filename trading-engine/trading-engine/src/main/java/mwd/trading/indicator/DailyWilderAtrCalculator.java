@@ -2,7 +2,7 @@ package mwd.trading.indicator;
 
 import com.ib.client.Bar;
 import mwd.trading.broker.ibkr.RequestRegistry;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -14,14 +14,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class DailyWilderAtrCalculator {
     private static final Logger logger = LogManager.getLogger(DailyWilderAtrCalculator.class);
-    private final Blackboard blackboard;
+    private final StockLookup stocks;
     private final RequestRegistry registry;
 
     private final Map<Integer, List<Bar>> historyBuffer = new ConcurrentHashMap<>();
     private final int period = 14;
 
-    public DailyWilderAtrCalculator(Blackboard blackboard, RequestRegistry registry) {
-        this.blackboard = blackboard;
+    public DailyWilderAtrCalculator(StockLookup stocks, RequestRegistry registry) {
+        this.stocks = stocks;
         this.registry = registry;
     }
 
@@ -41,7 +41,7 @@ public class DailyWilderAtrCalculator {
         String ticker = registry.getTickerFor(reqId);
         if (ticker != null) {
             double dailyATR = calculateWildersATR(bars);
-            blackboard.getStock(ticker).setDailyATR(dailyATR);
+            stocks.getStock(ticker).setDailyATR(dailyATR);
             
             logger.info("[{}] Daily ATR (Regime) Seeded: {}. Range: {} to {}", 
                         ticker, dailyATR, startDate, endDate);

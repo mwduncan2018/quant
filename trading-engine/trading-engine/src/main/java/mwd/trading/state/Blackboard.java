@@ -19,7 +19,7 @@ import mwd.trading.execution.OrderRegistry;
 import mwd.trading.broker.ibkr.IdManager;
 import mwd.trading.broker.ibkr.TimeManager;
 
-public class Blackboard {
+public class Blackboard implements StrategyBlackboard {
 	public record EntryOwner(String strategyName, String ticker) {
 		public EntryOwner {
 			strategyName = requireIdentifier(strategyName, "strategyName");

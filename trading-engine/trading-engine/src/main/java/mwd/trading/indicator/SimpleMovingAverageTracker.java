@@ -12,14 +12,14 @@ import org.apache.logging.log4j.Logger;
 import com.ib.client.Bar;
 import com.ib.client.TickAttrib;
 
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import mwd.trading.domain.Stock;
 import mwd.trading.broker.ibkr.RequestRegistry;
 import mwd.trading.broker.ibkr.TickMap;
 
 public class SimpleMovingAverageTracker {
 	private static final Logger logger = LogManager.getLogger(SimpleMovingAverageTracker.class);
-	private final Blackboard blackboard;
+	private final StockLookup stocks;
 	private final RequestRegistry registry;
 	private final TickMap tickMap;
 
@@ -30,8 +30,8 @@ public class SimpleMovingAverageTracker {
 	private final Map<String, Double> sum19 = new ConcurrentHashMap<>();
 	private final Map<String, Double> sum9 = new ConcurrentHashMap<>();
 
-	public SimpleMovingAverageTracker(Blackboard blackboard, RequestRegistry registry, TickMap tickMap) {
-		this.blackboard = blackboard;
+	public SimpleMovingAverageTracker(StockLookup stocks, RequestRegistry registry, TickMap tickMap) {
+		this.stocks = stocks;
 		this.registry = registry;
 		this.tickMap = tickMap;
 	}
@@ -80,7 +80,7 @@ public class SimpleMovingAverageTracker {
 	}
 
 	private void updateBlackboard(String ticker, double price) {
-		Stock ss = blackboard.getStock(ticker);
+		Stock ss = stocks.getStock(ticker);
 		if (ss == null)
 			return;
 

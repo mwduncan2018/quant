@@ -6,7 +6,7 @@ import org.apache.logging.log4j.Logger;
 import com.ib.client.TickAttrib;
 import com.ib.client.TickType;
 
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StockLookup;
 import mwd.trading.domain.Stock;
 import mwd.trading.broker.ibkr.RequestRegistry;
 import mwd.trading.broker.ibkr.TickMap;
@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class PriceTickHandler {
     private static final Logger logger = LogManager.getLogger(PriceTickHandler.class);
-    private final Blackboard blackboard;
+    private final StockLookup stocks;
     private final RequestRegistry registry;
     private final TickMap tickMap;
     private final MarketDataInputStore inputStore;
@@ -24,11 +24,11 @@ public class PriceTickHandler {
     private final Set<String> formatConfirmed = ConcurrentHashMap.newKeySet();
 
     public PriceTickHandler(
-            Blackboard blackboard,
+            StockLookup stocks,
             RequestRegistry registry,
             TickMap tickMap,
             MarketDataInputStore inputStore) {
-        this.blackboard = blackboard;
+        this.stocks = stocks;
         this.registry = registry;
         this.tickMap = tickMap;
         this.inputStore = inputStore;
@@ -43,7 +43,7 @@ public class PriceTickHandler {
         String ticker = registry.getTickerFor(reqId);
         if (ticker == null) return;
 
-        Stock stock = blackboard.getStock(ticker);
+        Stock stock = stocks.getStock(ticker);
 
         if (tickMap.isBid(field)) {
             stock.setBid(price);
@@ -102,7 +102,7 @@ public class PriceTickHandler {
             return;
         }
 
-        Stock stock = blackboard.getStock(ticker);
+        Stock stock = stocks.getStock(ticker);
         stock.setDailyVWAP(vwap);
         inputStore.record(ticker, MarketDataInput.DAILY_VWAP);
 
@@ -138,7 +138,7 @@ public class PriceTickHandler {
 		if (ticker == null)
 			return;
 
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 		if (stock == null)
 			return;
 
@@ -156,7 +156,7 @@ public class PriceTickHandler {
 		if (ticker == null)
 			return;
 
-		Stock stock = blackboard.getStock(ticker);
+		Stock stock = stocks.getStock(ticker);
 		if (stock == null)
 			return;
 

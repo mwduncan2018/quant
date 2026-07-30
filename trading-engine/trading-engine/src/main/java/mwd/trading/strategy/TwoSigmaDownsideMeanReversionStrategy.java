@@ -13,7 +13,7 @@ import java.util.Set;
 import com.ib.client.Bar;
 import com.ib.client.Decimal;
 import mwd.trading.domain.Account;
-import mwd.trading.state.Blackboard;
+import mwd.trading.state.StrategyBlackboard;
 import mwd.trading.execution.BracketOrderExecutor;
 import mwd.trading.execution.BracketOrder;
 import mwd.trading.execution.BracketOrderGateway;
@@ -74,7 +74,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     private final Clock newYorkClock;
 
     public TwoSigmaDownsideMeanReversionStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
@@ -97,7 +97,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     }
 
     TwoSigmaDownsideMeanReversionStrategy(
-            Blackboard blackboard,
+            StrategyBlackboard blackboard,
             BracketOrderGateway bracketOrderGateway,
             TickStreamController tickStreamController,
             Config config,
