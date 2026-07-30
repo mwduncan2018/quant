@@ -32,6 +32,8 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -45,6 +47,12 @@ import static mwd.trading.support.ProxyReferenceFixtures.standardSession;
  */
 class MarketDataReadinessGatingTest {
     private static final String TICKER = "AAPL";
+
+    /** Margin is configuration now; this is the rate these assertions assume. */
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            java.util.List.of("AAPL,INFORMATION_TECHNOLOGY,1.0,1.0,1.0,1.0"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     private static final LocalDate TRADING_DATE = LocalDate.of(2026, 7, 27);
     private static final Instant NOW = Instant.parse("2026-07-27T14:00:00Z");
     private static final long MARKET_DATA_MAX_AGE_MS = 30_000L;
@@ -84,6 +92,7 @@ class MarketDataReadinessGatingTest {
                 config,
                 tradingGate,
                 inputStore,
+                UNIVERSE_REFERENCE,
                 optionsStore,
                 // Far-off earnings and a standard session, so each assertion
                 // isolates the market-data condition under test.
@@ -96,7 +105,6 @@ class MarketDataReadinessGatingTest {
     /** Every non-market-data entry lock is satisfied by this state. */
     private void primeCapitulationState() {
         Stock stock = blackboard.getStock(TICKER);
-        stock.setLongMarginRateVerified(true);
         stock.setPreviousClose(100.0);
         stock.setLastPrice(96.0);
         stock.setDailyVWAP(101.0);

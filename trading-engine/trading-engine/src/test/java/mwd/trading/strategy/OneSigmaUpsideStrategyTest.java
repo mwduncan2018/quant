@@ -34,6 +34,8 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -48,6 +50,12 @@ import mwd.trading.support.TestConfig;
  */
 class OneSigmaUpsideStrategyTest {
     private static final String TICKER = "AAPL";
+
+    /** Margin is configuration now; this is the rate these assertions assume. */
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            java.util.List.of("AAPL,INFORMATION_TECHNOLOGY,0.30,0.30,0.30,0.30"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     private static final LocalDate MONDAY = LocalDate.of(2026, 7, 27);
     private static final Instant MID_MORNING = newYork(MONDAY, 10, 0);
     private static final double PREVIOUS_CLOSE = 100.0;
@@ -86,7 +94,7 @@ class OneSigmaUpsideStrategyTest {
         OneSigmaUpsideMeanReversionStrategy built =
                 new OneSigmaUpsideMeanReversionStrategy(
                         blackboard, gateway, new NoopTickStreams(), config, tradingGate,
-                        inputStore, optionsStore, calendar, Clock.fixed(now, ZoneOffset.UTC));
+                        inputStore, UNIVERSE_REFERENCE, optionsStore, calendar, Clock.fixed(now, ZoneOffset.UTC));
         primeState();
         return built;
     }
@@ -96,8 +104,6 @@ class OneSigmaUpsideStrategyTest {
         blackboard.getAccount().setAvailableFunds(50_000.0);
 
         Stock stock = blackboard.getStock(TICKER);
-        stock.setShortMarginRateVerified(true);
-        stock.setShortMarginRate(0.30);
         stock.setPreviousClose(PREVIOUS_CLOSE);
         stock.setLastPrice(ENTRY_LEVEL);
         stock.setDailyVWAP(101.0);
@@ -159,20 +165,6 @@ class OneSigmaUpsideStrategyTest {
         assertTrue(built.isEntryConditionMet(market()));
 
         stock().setDailyVWAP(103.01);
-        assertFalse(built.isEntryConditionMet(market()));
-    }
-
-    @Test
-    void anUnpricedShortMarginRateBlocksEntry() {
-        // The margin pacer requests BUY then SELL, so there is a window where
-        // the long side is priced and the short side still holds its 1.0
-        // default. A single shared flag would let a short size against that
-        // default and be silently reduced to cash-equivalent size.
-        OneSigmaUpsideMeanReversionStrategy built =
-                strategy(MID_MORNING, standardSession(MONDAY));
-        stock().setShortMarginRateVerified(false);
-        stock().setLongMarginRateVerified(true);
-
         assertFalse(built.isEntryConditionMet(market()));
     }
 

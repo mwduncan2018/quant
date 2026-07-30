@@ -39,6 +39,8 @@ import mwd.trading.marketdata.MarketDataInputStore;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.optionsproxy.proto.IndicatorFrame;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
@@ -54,6 +56,12 @@ import mwd.trading.support.TestConfig;
  */
 class TwoSigmaDownsidePolicyTest {
     private static final String TICKER = "AAPL";
+
+    /** Margin is configuration now; this is the rate these assertions assume. */
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            java.util.List.of("AAPL,INFORMATION_TECHNOLOGY,0.25,0.25,0.25,0.25"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     private static final LocalDate MONDAY = LocalDate.of(2026, 7, 27);
     private static final LocalDate FRIDAY = LocalDate.of(2026, 7, 24);
     private static final LocalDate TUESDAY = LocalDate.of(2026, 7, 28);
@@ -100,6 +108,7 @@ class TwoSigmaDownsidePolicyTest {
                         config,
                         tradingGate,
                         inputStore,
+                        UNIVERSE_REFERENCE,
                         optionsStore,
                         earnings,
                         calendar,
@@ -116,8 +125,6 @@ class TwoSigmaDownsidePolicyTest {
         blackboard.getAccount().setAvailableFunds(50_000.0);
 
         Stock stock = blackboard.getStock(TICKER);
-        stock.setLongMarginRateVerified(true);
-        stock.setLongMarginRate(0.25);
         stock.setPreviousClose(100.0);
         stock.setLastPrice(96.0);
         stock.setDailyVWAP(101.0);

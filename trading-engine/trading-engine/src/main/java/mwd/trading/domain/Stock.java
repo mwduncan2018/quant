@@ -92,69 +92,6 @@ public class Stock {
         }
     }
 
-    /*
-     * Margin Info
-     */
-    // Written by the IBKR reader thread from what-if responses and read by every
-    // strategy thread, so all of these must be volatile like the rest of Stock.
-    //
-    // The defaults of 1.0 mean "assume 100% margin", which sizes a position as
-    // though it were paid for in cash. That is the safe direction, but it is
-    // indistinguishable from a measured rate, which is why verification is
-    // tracked per direction rather than inferred from the value.
-    private volatile double longMarginRate = 1.0;
-    private volatile double shortMarginRate = 1.0;
-    private volatile boolean longMarginRateVerified = false;
-    private volatile boolean shortMarginRateVerified = false;
-
-    /**
-     * Whether IBKR has priced a BUY what-if for this symbol.
-     *
-     * <p>
-     * Separate from the short flag because the margin pacer requests the two
-     * directions independently. A single combined flag would report a symbol as
-     * verified once either arrived, letting the other direction size against an
-     * untouched 1.0 default.
-     */
-    public boolean isLongMarginRateVerified() {
-        return longMarginRateVerified;
-    }
-
-    /** Whether IBKR has priced a SELL what-if for this symbol. */
-    public boolean isShortMarginRateVerified() {
-        return shortMarginRateVerified;
-    }
-
-    public void setLongMarginRateVerified(boolean verified) {
-        this.longMarginRateVerified = verified;
-    }
-
-    public void setShortMarginRateVerified(boolean verified) {
-        this.shortMarginRateVerified = verified;
-    }
-
-    public double calculateMarginRequirement(String action, Decimal qty, double price) {
-        double notionalValue = Math.abs(qty.value().doubleValue()) * price;
-        double rate = action.equalsIgnoreCase("BUY") ? longMarginRate : shortMarginRate;
-        return notionalValue * rate;
-    }
-
-    public double getLongMarginRate() {
-        return this.longMarginRate;
-    }
-
-    public double getShortMarginRate() {
-        return this.shortMarginRate;
-    }
-
-    public void setLongMarginRate(double rate) {
-        this.longMarginRate = rate;
-    }
-
-    public void setShortMarginRate(double rate) {
-        this.shortMarginRate = rate;
-    }
-
     // Tick Price
     private volatile double lastPrice;
     private volatile double bid;

@@ -24,12 +24,14 @@ import javax.swing.table.TableColumn;
 import mwd.trading.domain.Account;
 import mwd.trading.domain.Stock;
 import mwd.trading.execution.BracketOrder;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.state.Blackboard;
 
 public class BlackboardMonitor extends JFrame {
 	private final int refreshRateMilliseconds = 250;
 	private static final long serialVersionUID = 1L;
 	private final Blackboard blackboard;
+	private final UniverseReference universeReference;
 	private final DefaultTableModel tableModel;
 	private final JTable monitorTable;
 	private final JPanel headerPanel;
@@ -84,8 +86,9 @@ public class BlackboardMonitor extends JFrame {
 	private final Set<Integer> view2Indices = Set.of(0, 1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 			31);
 
-	public BlackboardMonitor(Blackboard blackboard) {
+	public BlackboardMonitor(Blackboard blackboard, UniverseReference universeReference) {
 		this.blackboard = blackboard;
+		this.universeReference = universeReference;
 		this.tableModel = new DefaultTableModel(tableColumns, 0);
 		this.monitorTable = new JTable(tableModel);
 		this.monitorTable.setRowHeight(25);
@@ -447,8 +450,10 @@ public class BlackboardMonitor extends JFrame {
 				updateTableCellIfChanged(rowIndex, 26, String.format("%.2f", stock.getSma20()));
 				updateTableCellIfChanged(rowIndex, 27, String.format("%.2f", stock.getSma10()));
 				updateTableCellIfChanged(rowIndex, 28, String.format("%.2f", stock.getRSI()));
-				updateTableCellIfChanged(rowIndex, 29, String.format("%.2f", stock.getLongMarginRate()));
-				updateTableCellIfChanged(rowIndex, 30, String.format("%.2f", stock.getShortMarginRate()));
+				updateTableCellIfChanged(rowIndex, 29, String.format("%.2f",
+						universeReference.marginRate(stock.getTicker(), true)));
+				updateTableCellIfChanged(rowIndex, 30, String.format("%.2f",
+						universeReference.marginRate(stock.getTicker(), false)));
 
 				// Formatter for Earnings
 				String earningsStr = "";

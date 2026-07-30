@@ -29,6 +29,7 @@ import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.state.StrategyBlackboard;
 
 /**
@@ -127,10 +128,11 @@ public class OneSigmaUpsideMeanReversionStrategy extends AbstractStrategy {
             Config config,
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
+            UniverseReference universeReference,
             OptionsIndicatorStore optionsIndicatorStore,
             MarketCalendarStore marketCalendarStore) {
         this(blackboard, bracketOrderGateway, tickStreamController, config, tradingGate,
-                marketDataFreshness, optionsIndicatorStore, marketCalendarStore,
+                marketDataFreshness, universeReference, optionsIndicatorStore, marketCalendarStore,
                 Clock.systemUTC());
     }
 
@@ -141,11 +143,13 @@ public class OneSigmaUpsideMeanReversionStrategy extends AbstractStrategy {
             Config config,
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
+            UniverseReference universeReference,
             OptionsIndicatorStore optionsIndicatorStore,
             MarketCalendarStore marketCalendarStore,
             Clock clock) {
         super(blackboard, bracketOrderGateway, tickStreamController, config, tradingGate,
-                marketDataFreshness, config.getStrategyUniverse(STRATEGY_ID), clock);
+                marketDataFreshness, universeReference,
+                config.getStrategyUniverse(STRATEGY_ID), clock);
         this.optionsIndicatorStore = Objects.requireNonNull(
                 optionsIndicatorStore, "optionsIndicatorStore");
         this.marketCalendarStore = Objects.requireNonNull(
@@ -179,10 +183,6 @@ public class OneSigmaUpsideMeanReversionStrategy extends AbstractStrategy {
         // A short is sized against the short margin rate, so the SELL what-if
         // is what must have been priced. The pacer requests BUY first, so the
         // long side is verified a pacing interval earlier.
-        if (!market.shortMarginRateVerified()) {
-            return false;
-        }
-
         LocalDate tradingDate = currentTradingDate();
         Instant now = newYorkClock.instant();
 
@@ -296,13 +296,14 @@ public class OneSigmaUpsideMeanReversionStrategy extends AbstractStrategy {
         }
         Decimal idealQuantity = Decimal.get(idealShareCount);
 
+        // The rate is configuration, read from the reference table rather than
+        // measured per symbol. A symbol with no configured rate falls back to a
+        // deliberately conservative default, so it under-sizes rather than
+        // over-leverages.
+        double marginRate = universeReference.marginRate(market.ticker(), false);
         double marginRequirement =
-                market.marginRequirement("SELL", idealQuantity, entryPrice);
+                idealShareCount * entryPrice * marginRate;
         if (marginRequirement > availableFunds) {
-            double marginRate = market.shortMarginRate();
-            if (marginRate <= 0.0) {
-                return Decimal.ZERO;
-            }
             double affordableShares = Math.floor(availableFunds / (entryPrice * marginRate));
             return affordableShares > 0 ? Decimal.get(affordableShares) : Decimal.ZERO;
         }

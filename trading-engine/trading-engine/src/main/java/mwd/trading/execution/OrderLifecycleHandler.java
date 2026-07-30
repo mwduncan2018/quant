@@ -41,10 +41,6 @@ public class OrderLifecycleHandler {
     }
 
     public void onOpenOrder(int orderIdentifier, Contract contract, Order order, OrderState orderState) {
-        if (order.whatIf()) {
-            processWhatIf(contract, order, orderState);
-            return;
-        }
 
         reconciliationManager.onOpenOrder(orderIdentifier, contract, order, orderState);
 
@@ -301,68 +297,6 @@ public class OrderLifecycleHandler {
             bracketOrder.applyBrokerUpdate(apiOrderIdentifier, permanentIdentifier, "BOUND", null, null);
             persist(bracketOrder);
         }
-    }
-
-    private void processWhatIf(Contract contract, Order order, OrderState orderState) {
-        Stock stock = blackboard.getStock(contract.symbol());
-        double marginDollarChange = parseMarginChange(orderState.initMarginChange());
-        if (Double.isNaN(marginDollarChange)) {
-            // Leaving the rate at its conservative 1.0 default and the verified
-            // flag unset blocks entries for this direction, which is the outcome
-            // to want when the broker did not price the order.
-            logger.warn("[{}] What-if returned no usable initial margin ('{}'); the {} rate stays unverified",
-                    contract.symbol(), orderState.initMarginChange(),
-                    order.action() == Action.BUY ? "long" : "short");
-            return;
-        }
-
-        double notionalValue = 100 * stock.getLastPrice();
-        if (notionalValue <= 0) {
-            return;
-        }
-        double calculatedRate = marginDollarChange / notionalValue;
-        // Only the direction that was priced is marked verified. Marking both
-        // would let the other side size against its untouched 1.0 default.
-        if (order.action() == Action.BUY) {
-            stock.setLongMarginRate(calculatedRate);
-            stock.setLongMarginRateVerified(true);
-        } else {
-            stock.setShortMarginRate(calculatedRate);
-            stock.setShortMarginRateVerified(true);
-        }
-    }
-
-    /**
-     * Reads an {@code OrderState} margin figure, or returns {@code NaN} when the
-     * broker did not supply one.
-     *
-     * <p>
-     * Three shapes have to be rejected, and only one of them looks like a
-     * failure. IBKR leaves the field null or blank when it has nothing to report,
-     * which previously threw out of the callback — the reader loop catches the
-     * exception and breaks the message pump, forcing a reconnect. It also uses
-     * {@link Double#MAX_VALUE} as an "unset" sentinel, which parses perfectly
-     * well and would otherwise be divided by the notional and stored as a margin
-     * rate. A non-positive value is equally unusable: a rate of zero makes
-     * {@code calculateMarginRequirement} return zero, which reads as "this
-     * position needs no margin" and removes the ceiling from position sizing.
-     */
-    static double parseMarginChange(String reported) {
-        if (reported == null || reported.isBlank()) {
-            return Double.NaN;
-        }
-
-        double value;
-        try {
-            value = Double.parseDouble(reported.trim());
-        } catch (NumberFormatException e) {
-            return Double.NaN;
-        }
-
-        if (!Double.isFinite(value) || value == Double.MAX_VALUE || value <= 0) {
-            return Double.NaN;
-        }
-        return value;
     }
 
     private void validateExitSlice(int orderIdentifier, Order order, BracketOrder bracketOrder) {

@@ -29,6 +29,7 @@ import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.optionsproxy.OptionsIndicatorStore;
+import mwd.trading.risk.UniverseReference;
 
 public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
     public static final String STRATEGY_ID = "TWO_SIGMA_DOWNSIDE";
@@ -80,6 +81,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             Config config,
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
+            UniverseReference universeReference,
             OptionsIndicatorStore optionsIndicatorStore,
             EarningsStore earningsStore,
             MarketCalendarStore marketCalendarStore) {
@@ -90,6 +92,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
                 config,
                 tradingGate,
                 marketDataFreshness,
+                universeReference,
                 optionsIndicatorStore,
                 earningsStore,
                 marketCalendarStore,
@@ -103,6 +106,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
             Config config,
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
+            UniverseReference universeReference,
             OptionsIndicatorStore optionsIndicatorStore,
             EarningsStore earningsStore,
             MarketCalendarStore marketCalendarStore,
@@ -114,6 +118,7 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
                 config,
                 tradingGate,
                 marketDataFreshness,
+                universeReference,
                 config.getStrategyUniverse(STRATEGY_ID),
                 clock);
         this.optionsIndicatorStore = Objects.requireNonNull(
@@ -150,10 +155,6 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         }
         */
 
-        if (!market.longMarginRateVerified()) { 
-            return false; 
-        }
-        
         // ---------------------------------------------------------
         // 2. TIME & BROAD MARKET CHECKS
         // No hardcoded clock times. The session close comes from the proxy's
@@ -353,11 +354,15 @@ public class TwoSigmaDownsideMeanReversionStrategy extends AbstractStrategy {
         double idealShareCount = Math.floor(portfolioRiskAmount / riskPerShare);
         Decimal idealQuantity = Decimal.get(idealShareCount);
         
-        double marginRequirement = market.marginRequirement("BUY", idealQuantity, entryPrice);
+        // The rate is configuration, read from the reference table rather than
+        // measured per symbol. A symbol with no configured rate falls back to a
+        // deliberately conservative default, so it under-sizes rather than
+        // over-leverages.
+        double marginRate = universeReference.marginRate(market.ticker(), true);
+        double marginRequirement = idealShareCount * entryPrice * marginRate;
         double actualAvailableCash = availableFunds;
 
         if (marginRequirement > actualAvailableCash) {
-            double marginRate = market.longMarginRate();
             double affordableShares = Math.floor(actualAvailableCash / (entryPrice * marginRate));
             if (affordableShares <= 0) return Decimal.ZERO;
             return Decimal.get(affordableShares);

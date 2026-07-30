@@ -102,7 +102,9 @@ public final class UniverseReference {
                 methodology, defaultLongRate, defaultShortRate);
     }
 
-    static UniverseReference parse(
+    /** Parses the same format from lines already in memory. */
+    /** Parses the same format from lines already in memory. */
+    public static UniverseReference parse(
             List<String> lines,
             MarginMethodology methodology,
             double defaultLongRate,

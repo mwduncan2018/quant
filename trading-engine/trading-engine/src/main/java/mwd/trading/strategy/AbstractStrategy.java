@@ -27,6 +27,7 @@ import mwd.trading.marketdata.MarketDataFreshness;
 import mwd.trading.marketdata.MarketDataInput;
 import mwd.trading.marketdata.MarketSnapshot;
 import mwd.trading.marketdata.TickStreamController;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.state.StrategyBlackboard;
 
 public abstract class AbstractStrategy implements Runnable {
@@ -39,6 +40,8 @@ public abstract class AbstractStrategy implements Runnable {
     protected final Config config;
     protected final TradingGate tradingGate;
     protected final MarketDataFreshness marketDataFreshness;
+    /** Per-ticker sectors and margin rates; configuration, not measurement. */
+    protected final UniverseReference universeReference;
 
     private final EntryAdmission entryAdmission;
     private final Set<String> universe;
@@ -67,6 +70,7 @@ public abstract class AbstractStrategy implements Runnable {
             Config config,
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
+            UniverseReference universeReference,
             Set<String> universe) {
         this(
                 blackboard,
@@ -75,6 +79,7 @@ public abstract class AbstractStrategy implements Runnable {
                 config,
                 tradingGate,
                 marketDataFreshness,
+                universeReference,
                 universe,
                 Clock.systemUTC());
     }
@@ -86,6 +91,7 @@ public abstract class AbstractStrategy implements Runnable {
             Config config,
             TradingGate tradingGate,
             MarketDataFreshness marketDataFreshness,
+            UniverseReference universeReference,
             Set<String> universe,
             Clock clock) {
         this.blackboard = Objects.requireNonNull(blackboard, "blackboard");
@@ -94,6 +100,7 @@ public abstract class AbstractStrategy implements Runnable {
         this.config = Objects.requireNonNull(config, "config");
         this.tradingGate = Objects.requireNonNull(tradingGate, "tradingGate");
         this.marketDataFreshness = Objects.requireNonNull(marketDataFreshness, "marketDataFreshness");
+        this.universeReference = Objects.requireNonNull(universeReference, "universeReference");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.entryAdmission = new EntryAdmission(this.blackboard);
 

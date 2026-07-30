@@ -42,11 +42,7 @@ public record MarketSnapshot(
         double dailyVWAP,
         Bar lastMinuteBar,
         Decimal lastMinuteVolume,
-        Decimal averageLast15MinuteVolume,
-        double longMarginRate,
-        boolean longMarginRateVerified,
-        double shortMarginRate,
-        boolean shortMarginRateVerified) {
+        Decimal averageLast15MinuteVolume) {
 
     public MarketSnapshot {
         Objects.requireNonNull(ticker, "ticker");
@@ -67,19 +63,6 @@ public record MarketSnapshot(
                 stock.getDailyVWAP(),
                 stock.getLastMinuteBar(),
                 stock.getLastMinuteVolume(),
-                stock.getAverageLast15MinuteVolume(),
-                stock.getLongMarginRate(),
-                stock.isLongMarginRateVerified(),
-                stock.getShortMarginRate(),
-                stock.isShortMarginRateVerified());
-    }
-
-    /**
-     * Sizes against the rate captured here rather than the live field, so the
-     * quantity submitted matches the rate the direction was verified against.
-     */
-    public double marginRequirement(String action, Decimal quantity, double price) {
-        double notionalValue = Math.abs(quantity.value().doubleValue()) * price;
-        return notionalValue * (action.equalsIgnoreCase("BUY") ? longMarginRate : shortMarginRate);
+                stock.getAverageLast15MinuteVolume());
     }
 }

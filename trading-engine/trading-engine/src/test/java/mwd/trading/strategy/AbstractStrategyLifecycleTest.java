@@ -34,11 +34,18 @@ import mwd.trading.execution.UncertainOrderSubmissionException;
 import mwd.trading.lifecycle.EngineMode;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.marketdata.MarketSnapshot;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.marketdata.TickStreamController;
 import mwd.trading.state.Blackboard;
 import mwd.trading.support.TestConfig;
 
 class AbstractStrategyLifecycleTest {
+    private static final UniverseReference UNIVERSE_REFERENCE = UniverseReference.parse(
+            List.of("AAPL,INFORMATION_TECHNOLOGY,0.25,0.25,0.25,0.25",
+                    "MSFT,INFORMATION_TECHNOLOGY,0.25,0.25,0.25,0.25"),
+            MarginMethodology.REG_T, 0.50, 0.50);
+
     @Test
     void oneCycleManagesEveryOpenPositionWithoutBlocking() {
         Fixture fixture = fixture(Set.of("AAPL", "MSFT"), 1000);
@@ -323,6 +330,7 @@ class AbstractStrategyLifecycleTest {
                     config,
                     tradingGate,
                     freshness,
+                    UNIVERSE_REFERENCE,
                     universe,
                     clock);
             this.direction = direction;

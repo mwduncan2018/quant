@@ -24,7 +24,8 @@ import mwd.trading.execution.OrderRegistry;
 import mwd.trading.config.Config;
 import mwd.trading.config.EnvPropConfig;
 import mwd.trading.broker.ibkr.IdManager;
-import mwd.trading.risk.MarginPacer;
+import mwd.trading.risk.MarginMethodology;
+import mwd.trading.risk.UniverseReference;
 import mwd.trading.broker.ibkr.RequestRegistry;
 import mwd.trading.marketdata.TickByTickManager;
 import mwd.trading.broker.ibkr.TickMap;
@@ -209,13 +210,28 @@ public class Main {
         marketCalendarThread.setDaemon(true);
         marketCalendarThread.start();
 
-        MarginPacer marginPacer = new MarginPacer(blackboard, sessionManager.client(), tradingGate);
-        Thread marginPacerThread = new Thread(marginPacer, "Margin-Pacer-Thread");
-        marginPacerThread.setDaemon(true);
-        marginPacerThread.start();
+        // Margin rates are configuration rather than measurement. They used to be
+        // priced by a what-if order per symbol per direction every five minutes,
+        // which ran at roughly twelve requests a minute against IBKR's stated
+        // ceiling of one, and cancelled none of them.
+        UniverseReference universeReference = UniverseReference.load(
+                java.nio.file.Path.of(config.getUniverseReferencePath()),
+                MarginMethodology.parse(config.getMarginMethodology()),
+                config.getDefaultLongMarginRate(),
+                config.getDefaultShortMarginRate());
+        for (String line : universeReference.describeCoverage(
+                Set.copyOf(marketDataSymbols), java.time.LocalDate.now())) {
+            logger.info(line);
+        }
+        universeReference.ageInDays(java.time.LocalDate.now())
+                .filter(age -> age > config.getUniverseReferenceMaxAgeDays())
+                .ifPresent(age -> logger.warn(
+                        "Margin reference data is {} days old, past the {} day limit; IBKR "
+                                + "reprices margin without notice, so sizing may be wrong",
+                        age, config.getUniverseReferenceMaxAgeDays()));
 
         if (config.showUI()) {
-            SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard));
+            SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard, universeReference));
         }
 
         OptionsIndicatorFrameReceiver receiverForShutdown = optionsIndicatorFrameReceiver;
@@ -234,6 +250,7 @@ public class Main {
                         config,
                         tradingGate,
                         marketDataInputStore,
+                        universeReference,
                         optionsIndicatorStore,
                         earningsStore,
                         marketCalendarStore)),
@@ -244,6 +261,7 @@ public class Main {
                         config,
                         tradingGate,
                         marketDataInputStore,
+                        universeReference,
                         optionsIndicatorStore,
                         marketCalendarStore)),
                 strategyThread(new OneSigmaUpsideMeanReversionStrategy(
@@ -253,15 +271,15 @@ public class Main {
                         config,
                         tradingGate,
                         marketDataInputStore,
+                        universeReference,
                         optionsIndicatorStore,
                         marketCalendarStore)));
         strategyThreads.forEach(Thread::start);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutdown requested; stopping the strategies, margin pacer, earnings "
-                    + "refresher, options-proxy receiver, IBKR session, and reconciliation manager");
+            logger.info("Shutdown requested; stopping the strategies, earnings refresher, "
+                    + "options-proxy receiver, IBKR session, and reconciliation manager");
             strategyThreads.forEach(Thread::interrupt);
-            marginPacerThread.interrupt();
             if (earningsRefresherForShutdown != null) {
                 earningsRefresherForShutdown.interrupt();
             }
