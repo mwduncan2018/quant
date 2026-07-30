@@ -47,9 +47,10 @@ would make a missing key indistinguishable from a deliberate choice, and getting
 it wrong toward `PORTFOLIO` is silent over-leverage — sizing against roughly a
 third while IBKR charges a half.
 
-**When the regime is unknown, assume the one that demands more margin.** Wrong in
-that direction under-sizes. Wrong the other way is the failure this note exists to
-prevent.
+**An unconfirmed regime does not trade.** Not a safer assumption, not a warning —
+no trading. The reasoning behind assuming the heavier regime still holds for any
+figure the engine must estimate, but the regime itself is not estimated: it is
+declared, confirmed, or refused. See the section below.
 
 **No automated liquidation.** Every position already carries a stop and a time
 exit as resting OCA orders. A de-risking path would have to cancel those brackets
@@ -76,7 +77,7 @@ market creates it.
 | Layer | State |
 |---|---|
 | 1 — declare the regime | **done**: `MARGIN_METHODOLOGY` required, no default |
-| 1 — confirm it against IBKR | not built |
+| 1 — confirm it against IBKR | not built; decided, and blocked on knowing which tags arrive |
 | 2 — position count, per-ticker, per-sector | **done**: `MAX_ACTIVE_POSITIONS`, `ConcentrationLimits` |
 | 2 — gross exposure ceiling | not built (currently implied by `3 × ticker%`) |
 | 3 — reserve at entry | not built |
@@ -151,7 +152,46 @@ All configuration, none of it hardcoded:
 | Portfolio-margin stress multiplier | _tbd_ | Applied to table rates, since TIMS rises on its own |
 | Whether any of the above differ per regime | _tbd_ | They probably should |
 
-**Open question.** What should the engine do when it cannot confirm the regime —
-IBKR's figures have not arrived, or they contradict the configured value? Refuse
-to trade, or continue on Reg-T assumptions with a warning? This changes the
-startup path, so it wants an answer before layer 1's confirmation step is built.
+## Unconfirmed regime: do not trade, and say so
+
+**Decided.** If the engine cannot confirm the declared regime against IBKR's own
+figures, it does not trade and logs an error. No fallback, no assumption, no
+warning-and-continue.
+
+That splits into two mechanisms, because the two checks happen at different times.
+
+**Declaration is checked before the process starts.** `MARGIN_METHODOLOGY` absent
+or unrecognised throws from the `EnvPropConfig` constructor, before `Main` builds
+anything or opens a socket. This is literally "does not start", and it is built.
+
+**Confirmation cannot be, and must not pretend to be.** The confirming figures
+arrive from `reqAccountUpdates`, which is issued in `onManagedAccounts` after the
+API handshake — by which time the process is up and the strategy threads are
+already polling. Refusing to boot is not available; the information does not exist
+yet at boot.
+
+The faithful form is therefore: **`TradingGate` never reaches `READY`.** Every
+entry is gated on `allowsNewEntries()`, so a gate that stays out of `READY` is a
+process that runs, connects, reconciles, streams market data, and never sends an
+order. `ReconciliationManager` already works exactly this way, and the regime
+check is the same shape — a post-connect condition that must pass before trading
+is permitted.
+
+Three ways confirmation can fail, all with the same outcome:
+
+| Case | Resolution |
+|---|---|
+| The figures never arrive within a timeout | `requireManualIntervention`, naming the tags that did not appear |
+| They arrive and contradict the declared regime | `requireManualIntervention`, reporting both the declared and the observed |
+| They arrive but cannot settle the question | `requireManualIntervention`. Silence is not confirmation |
+
+The third case is why this is not built yet. Confirmation compares what IBKR
+charges against `RegTMargin` — a requirement materially below Reg-T means the
+account is on Portfolio Margin — and whether `RegTMargin` reaches this engine at
+all is unresolved. It is an `AccountSummaryTag`, and the engine subscribes with
+`reqAccountUpdates`. The DEBUG logging of unread tags exists to settle that in one
+live session. Building the comparison before then would be writing a check against
+a tag that may never arrive, which is the mistake `ExcessMargin` already made once.
+
+**Sequencing:** run one session with DEBUG on, read which tags arrive, then build
+the confirmation against tags known to exist.
