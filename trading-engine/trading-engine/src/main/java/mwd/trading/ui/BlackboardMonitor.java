@@ -48,7 +48,7 @@ public class BlackboardMonitor extends JFrame {
 	private final JLabel availableFundsValueLabel = new JLabel();
 	private final JLabel realizedPnLValueLabel = new JLabel();
 	private final JLabel unrealizedPnLValueLabel = new JLabel();
-	private final JLabel excessMarginValueLabel = new JLabel();
+	private final JLabel excessLiquidityValueLabel = new JLabel();
 	private final JLabel marginCushionValueLabel = new JLabel();
 
 	private final DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -163,7 +163,7 @@ public class BlackboardMonitor extends JFrame {
 		addAccountLabel(accountPanel, "Avail Funds: ", availableFundsValueLabel);
 		addAccountLabel(accountPanel, "Realized PnL: ", realizedPnLValueLabel);
 		addAccountLabel(accountPanel, "Unrealized PnL: ", unrealizedPnLValueLabel);
-		addAccountLabel(accountPanel, "Excess Margin: ", excessMarginValueLabel);
+		addAccountLabel(accountPanel, "Excess Liq: ", excessLiquidityValueLabel);
 		addAccountLabel(accountPanel, "Cushion: ", marginCushionValueLabel);
 
 		JPanel footerPanel = new JPanel(new BorderLayout());
@@ -336,7 +336,7 @@ public class BlackboardMonitor extends JFrame {
 			settledCashValueLabel.setText(currencyFormatter.format(account.getSettledCash()));
 			buyingPowerValueLabel.setText(currencyFormatter.format(account.getBuyingPower()));
 			availableFundsValueLabel.setText(currencyFormatter.format(account.getAvailableFunds()));
-			excessMarginValueLabel.setText(currencyFormatter.format(account.getExcessMargin()));
+			excessLiquidityValueLabel.setText(currencyFormatter.format(account.getExcessLiquidity()));
 			updatePnLLabel(realizedPnLValueLabel, account.getRealizedPnL());
 			updatePnLLabel(unrealizedPnLValueLabel, account.getUnrealizedPnL());
 

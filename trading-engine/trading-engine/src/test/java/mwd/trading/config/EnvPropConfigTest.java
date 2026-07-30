@@ -44,6 +44,24 @@ class EnvPropConfigTest {
     }
 
     @Test
+    void aDeclaredMarginRegimeIsAccepted() {
+        assertEquals("REG_T", EnvPropConfig.requireMarginMethodology("REG_T"));
+        assertEquals("PORTFOLIO", EnvPropConfig.requireMarginMethodology("  PORTFOLIO  "));
+    }
+
+    @Test
+    void anUndeclaredMarginRegimeRefusesToStart() {
+        // There is no safe default. Assuming portfolio margin while IBKR charges
+        // Reg-T sizes every position larger than the account can carry, and
+        // nothing says so until the liquidation.
+        for (String absent : new String[] {null, "", "   "}) {
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> EnvPropConfig.requireMarginMethodology(absent));
+            assertTrue(thrown.getMessage().contains("MARGIN_METHODOLOGY"));
+        }
+    }
+
+    @Test
     void liveTradingOnDelayedDataRefusesToStart() {
         // The one pairing the split makes expressible and nobody means to write.
         IllegalStateException thrown = assertThrows(IllegalStateException.class,

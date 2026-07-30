@@ -63,7 +63,7 @@ public class AccountEventHandler {
 			case "SettledCash" -> account.setSettledCash(val);
 			case "BuyingPower" -> account.setBuyingPower(val);
 			case "AvailableFunds" -> account.setAvailableFunds(val);
-			case "ExcessMargin" -> account.setExcessMargin(val);
+			case "ExcessLiquidity" -> account.setExcessLiquidity(val);
 			case "RealizedPnL" -> account.setRealizedPnL(val);
 			case "UnrealizedPnL" -> account.setUnrealizedPnL(val);
 			case "Cushion" -> account.setCushion(val);
