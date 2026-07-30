@@ -217,7 +217,7 @@ public class Main {
         // ceiling of one, and cancelled none of them.
         UniverseReference universeReference = UniverseReference.load(
                 java.nio.file.Path.of(config.getUniverseReferencePath()),
-                MarginMethodology.parse(config.getMarginMethodology()),
+                config.getMarginMethodology(),
                 config.getDefaultLongMarginRate(),
                 config.getDefaultShortMarginRate());
         for (String line : universeReference.describeCoverage(

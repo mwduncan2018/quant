@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import mwd.trading.risk.MarginMethodology;
+
 import mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy;
 
 class EnvPropConfigTest {
@@ -45,8 +47,20 @@ class EnvPropConfigTest {
 
     @Test
     void aDeclaredMarginRegimeIsAccepted() {
-        assertEquals("REG_T", EnvPropConfig.requireMarginMethodology("REG_T"));
-        assertEquals("PORTFOLIO", EnvPropConfig.requireMarginMethodology("  PORTFOLIO  "));
+        assertEquals(MarginMethodology.REG_T, EnvPropConfig.requireMarginMethodology("REG_T"));
+        assertEquals(MarginMethodology.PORTFOLIO,
+                EnvPropConfig.requireMarginMethodology("  PORTFOLIO  "));
+    }
+
+    @Test
+    void aRegimeThatIsNeitherRefusesToStart() {
+        // Presence is not enough. "REGT" is a declaration of nothing, and
+        // guessing which of the two was meant is the guess this refuses to make.
+        for (String wrong : new String[] {"REGT", "PM", "portfolio margin", "true"}) {
+            IllegalStateException thrown = assertThrows(IllegalStateException.class,
+                    () -> EnvPropConfig.requireMarginMethodology(wrong));
+            assertTrue(thrown.getMessage().contains("REG_T or PORTFOLIO"));
+        }
     }
 
     @Test

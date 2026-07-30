@@ -100,10 +100,34 @@ layer 4.
 Today only `NetLiquidation` and `AvailableFunds` affect a decision. The rest draw
 labels on the monitor.
 
-Not yet captured, and each needed by a layer above: `MaintMarginReq`,
-`FullMaintMarginReq`, `LookAheadExcessLiquidity`, `LookAheadMaintMarginReq`,
-`LookAheadNextChange`, `RegTMargin`. They stay uncaptured until their consumer
-exists, so no dead fields arrive ahead of a reader.
+The authoritative list is `com.ib.controller.AccountSummaryTag` in the TWS API
+source. Three entries there are worth more than anything the engine would compute
+for itself:
+
+| Tag | IBKR's own comment |
+|---|---|
+| `HighestSeverity` | "A measure of how close the account is to liquidation" |
+| `Leverage` | `GrossPositionValue / NetLiquidation` |
+| `GrossPositionValue` | "The sum of the absolute value of all stock and equity option positions" |
+
+`HighestSeverity` answers the question this note exists to ask, directly, from the
+party that performs the liquidation. `Leverage` and `GrossPositionValue` are the
+gross-exposure figures layer 2 would otherwise derive from `ConcentrationLimits`.
+Prefer IBKR's numbers to our own wherever both exist.
+
+The enum also groups margin into three sets: current (`InitMarginReq`,
+`MaintMarginReq`, `AvailableFunds`, `ExcessLiquidity`), overnight (the `Full*`
+prefix), and look-ahead (`LookAhead*`, with `LookAheadNextChange` giving the time
+the new figures take effect).
+
+**Caveat.** That enum is for `reqAccountSummary`. This engine subscribes with
+`reqAccountUpdates`, which delivers `updateAccountValue`, and the two sets overlap
+without being identical. Which tags actually arrive is a question only a live
+session answers, so `AccountEventHandler` now logs each unread tag once at DEBUG.
+One run enumerates what is really available before anything is built on top of it.
+
+Nothing beyond `ExcessLiquidity` is captured yet. Fields arrive with their
+consumer, not ahead of it.
 
 `LookAheadNextChange` deserves a note of its own: IBKR publishes when the
 requirement will next change, normally the intraday-to-overnight step at the

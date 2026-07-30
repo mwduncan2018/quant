@@ -7,6 +7,8 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
 
+import mwd.trading.risk.MarginMethodology;
+
 public class EnvPropConfig implements Config {
 	private boolean isLive = false;
 	private boolean isLiveTrading = false;
@@ -24,7 +26,7 @@ public class EnvPropConfig implements Config {
 	private int optionsProxyUdpPort = 5005;
 	private long optionsProxyFrameMaxAgeMs = 5000;
 	private long marketDataMaxAgeMs = 30000;
-	private String marginMethodology;
+	private MarginMethodology marginMethodology;
 	private String universeReferencePath = "data/universe-reference.csv";
 	private double defaultLongMarginRate = 0.50;
 	private double defaultShortMarginRate = 0.50;
@@ -189,14 +191,22 @@ public class EnvPropConfig implements Config {
 	 * portfolio-margin rate while IBKR charges Reg-T means every position is larger
 	 * than the account can carry, and nothing says so until the liquidation.
 	 */
-	static String requireMarginMethodology(String configured) {
+	static MarginMethodology requireMarginMethodology(String configured) {
 		if (configured == null || configured.isBlank()) {
 			throw new IllegalStateException(
 				"MARGIN_METHODOLOGY must be set to REG_T or PORTFOLIO. It decides how the "
 					+ "engine measures its distance from IBKR liquidating the account, so there "
 					+ "is no safe default to fall back on.");
 		}
-		return configured.trim();
+		try {
+			return MarginMethodology.parse(configured);
+		} catch (IllegalArgumentException exception) {
+			throw new IllegalStateException(
+				"MARGIN_METHODOLOGY must be REG_T or PORTFOLIO, was '" + configured.trim()
+					+ "'. The engine measures its distance from IBKR liquidating the account "
+					+ "differently under each, so it will not guess which one you meant.",
+				exception);
+		}
 	}
 
 	static void requireCoherentDataAndTradingPair(boolean liveData, boolean liveTrading) {
@@ -329,7 +339,7 @@ public class EnvPropConfig implements Config {
 	}
 
 	@Override
-	public String getMarginMethodology() {
+	public MarginMethodology getMarginMethodology() {
 		return this.marginMethodology;
 	}
 

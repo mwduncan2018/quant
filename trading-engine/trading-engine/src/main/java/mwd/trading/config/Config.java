@@ -2,6 +2,8 @@ package mwd.trading.config;
 
 import java.util.Set;
 
+import mwd.trading.risk.MarginMethodology;
+
 public interface Config {
 	/**
 	 * Whether market data is real-time. Governs the IBKR market-data type and the
@@ -53,7 +55,7 @@ public interface Config {
 	 * Which IBKR margin regime the account is on, selecting which pair of rates
 	 * in the reference table applies.
 	 */
-	String getMarginMethodology();
+	MarginMethodology getMarginMethodology();
 
 	/** Path to the per-ticker reference table of sectors and margin rates. */
 	String getUniverseReferencePath();

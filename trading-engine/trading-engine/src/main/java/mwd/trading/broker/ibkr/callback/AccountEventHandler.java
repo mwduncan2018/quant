@@ -16,6 +16,8 @@ public class AccountEventHandler {
 	private static final Logger logger = LogManager.getLogger(AccountEventHandler.class);
 	private final Blackboard blackboard;
 	private final ReconciliationManager reconciliationManager;
+	private final java.util.Set<String> reportedUnhandledKeys =
+			java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 	public AccountEventHandler(Blackboard blackboard, ReconciliationManager reconciliationManager) {
 		this.blackboard = Objects.requireNonNull(blackboard, "blackboard");
@@ -67,9 +69,28 @@ public class AccountEventHandler {
 			case "RealizedPnL" -> account.setRealizedPnL(val);
 			case "UnrealizedPnL" -> account.setUnrealizedPnL(val);
 			case "Cushion" -> account.setCushion(val);
+			default -> reportUnhandled(key);
 			}
 		} catch (NumberFormatException e) {
 			// Skip non-numeric metadata tags from IBKR
+		}
+	}
+
+	/**
+	 * Names an account tag the engine receives but does not read, once each.
+	 *
+	 * <p>
+	 * The tags are matched by exact string, so a name IBKR never sends looks
+	 * exactly like a value that never arrives: the field stays at zero and nothing
+	 * says so. That is how ExcessLiquidity came to be read as ExcessMargin. The
+	 * authoritative list is {@code com.ib.controller.AccountSummaryTag}, but that
+	 * enum covers reqAccountSummary and this engine subscribes with
+	 * reqAccountUpdates, so which of those tags actually arrive here is a question
+	 * only a live session answers. One run of the log settles it.
+	 */
+	private void reportUnhandled(String key) {
+		if (reportedUnhandledKeys.add(key)) {
+			logger.debug("IBKR sent account value '{}', which the engine does not read", key);
 		}
 	}
 
