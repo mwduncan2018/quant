@@ -19,6 +19,8 @@ Sources:
 
 Declares the read-only accessors for every engine setting. Market-data quality (`isLiveIBKRData`) and the traded account (`isLiveTrading`) are separate accessors so that a real-time subscription can be enabled without redirecting order flow. Covers IBKR connection and account values, strategy poll rate and position cap, trading-state path, per-strategy symbol sets, options-proxy UDP settings, market-data age limit, earnings/calendar endpoint settings, the margin regime and per-ticker reference table, and the concentration caps.
 
+`getMarginMethodology()` is the one setting with no default. Reg-T and Portfolio Margin size the same position differently and fail differently, and an engine that guessed wrong would size against a requirement the broker does not charge, so `requireMarginMethodology(String)` throws from the constructor rather than assume either one.
+
 ### 2. Injected Dependencies
 
 None. Interfaces declare no constructor.
@@ -46,7 +48,7 @@ String getOptionsProxyBindHost()
 int getOptionsProxyUdpPort()
 long getOptionsProxyFrameMaxAgeMs()
 long getMarketDataMaxAgeMs()
-String getMarginMethodology()
+MarginMethodology getMarginMethodology()
 String getUniverseReferencePath()
 double getDefaultLongMarginRate()
 double getDefaultShortMarginRate()
@@ -102,7 +104,7 @@ Instance fields initialised with defaults:
 | `optionsProxyUdpPort` | `int` | `5005` |
 | `optionsProxyFrameMaxAgeMs` | `long` | `5000` |
 | `marketDataMaxAgeMs` | `long` | `30000` |
-| `marginMethodology` | `String` | `"REG_T"` |
+| `marginMethodology` | `MarginMethodology` | none — `MARGIN_METHODOLOGY` absent or unrecognised throws from `initialize()` |
 | `universeReferencePath` | `String` | `"data/universe-reference.csv"` |
 | `defaultLongMarginRate` | `double` | `0.50` |
 | `defaultShortMarginRate` | `double` | `0.50` |
@@ -148,7 +150,7 @@ private Set<String> symbolsFor(String strategyId, String suffix)
 @Override public int getOptionsProxyUdpPort()
 @Override public long getOptionsProxyFrameMaxAgeMs()
 @Override public long getMarketDataMaxAgeMs()
-@Override public String getMarginMethodology()
+@Override public MarginMethodology getMarginMethodology()
 @Override public String getUniverseReferencePath()
 @Override public double getDefaultLongMarginRate()
 @Override public double getDefaultShortMarginRate()

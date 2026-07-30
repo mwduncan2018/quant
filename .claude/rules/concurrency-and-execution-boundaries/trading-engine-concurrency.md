@@ -43,7 +43,7 @@ Executing on a strategy poll thread:
 
 | Class | Methods |
 |---|---|
-| `AbstractStrategy` | `run`, `runOneCycle`, `processSymbolSafely`, `executeLifecycle`, `acknowledgeStatusChange`, `evaluateNewEntry`, `handlePendingEntry`, `handleFlatWithLocalOwnership`, `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `snapshot`, `trimToTotal`, `updateExits`, `entryInputsReady`, `automatedOrderChangesAllowed`, `acknowledgementTimedOut`, `escalate`, `strategyId`, `tradeDirection` |
+| `AbstractStrategy` | `run`, `runOneCycle`, `processSymbolSafely`, `executeLifecycle`, `acknowledgeStatusChange`, `evaluateNewEntry`, `handlePendingEntry`, `handleFlatWithLocalOwnership`, `hasUnfinishedLifecycle`, `cleanupOwnedLifecycle`, `rollbackEntryReservation`, `snapshot`, `trimToTotal`, `updateExits`, `entryInputsReady`, `automatedOrderChangesAllowed`, `acknowledgementTimedOut`, `escalate`, `strategyId`, `tradeDirection` |
 | `EntryAdmission` | `tryAdmit`, and `Reservation.keep` / `release` / `close` |
 | `MarketSnapshot` | `of`, taken once per screening pass and once per admitted entry, plus once per management cycle |
 | `UniverseReference` | `marginRate`, `sector` — immutable after construction, so no synchronization is involved |
@@ -179,7 +179,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `ConcurrentMap<String, PendingEntry> pendingEntries = new ConcurrentHashMap<>()` | `AbstractStrategy` |
 | `Set<String> escalatedPendingEntries = ConcurrentHashMap.newKeySet()` | `AbstractStrategy` |
 | `ConcurrentMap<String, String> lastUnreadyReason = new ConcurrentHashMap<>()` | `AbstractStrategy` |
-| `ConcurrentMap<String, BracketOrder.Status> acknowledgedStatus = new ConcurrentHashMap<>()` | `AbstractStrategy` |
+| `ConcurrentMap<String, Acknowledged> acknowledgedStatus = new ConcurrentHashMap<>()` | `AbstractStrategy` |
 | `Map<String, Instant> lastExitByTicker = new ConcurrentHashMap<>()` | `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` |
 | `Map<String, Integer> takeProfitUpdates = new ConcurrentHashMap<>()` | `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` |
 | `Map<String, Instant> lastTakeProfitUpdate = new ConcurrentHashMap<>()` | `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy` |
@@ -273,7 +273,7 @@ Compare-and-set / read-modify-write call sites:
 | Per-ticker lifecycle state derived rather than stored, so the reader and strategy threads cannot disagree about it | `Stock.positionStateOf(boolean, BracketOrder)` |
 | Per-symbol market data frozen for the length of one decision | `MarketSnapshot.of(Stock, long)` |
 | Per-ticker and per-sector exposure caps, shared across strategies so one sector total is seen by all of them | `ConcentrationLimits.allowedQuantity(String, double, Decimal)` |
-| Edge-triggering for work that must happen once per broker status | `AbstractStrategy.acknowledgedStatus` |
+| Edge-triggering for work that must happen once per broker status, keyed by trade id as well as status | `AbstractStrategy.acknowledgedStatus` |
 | Single application-wide mode authority; `MANUAL_INTERVENTION` is sticky except for `STOPPING` | `TradingGate.transitionTo` |
 | All connect/reconnect/subscription work confined to one thread | `IbkrSessionManager.lifecycleExecutor` (`newSingleThreadScheduledExecutor`) |
 | Reconciliation epoch collection confined by the instance monitor; timeout fires on a separate single-thread scheduler and re-checks `activeEpoch.number` under the same monitor | `ReconciliationManager` |
@@ -332,7 +332,7 @@ Compare-and-set / read-modify-write call sites:
 |---|---|---|
 | `accountId` | `volatile String` | `setAccountId` |
 | `lastRefreshedAtMillis` | `volatile long` | `setLastRefreshedAtMillis` |
-| `netLiquidation`, `totalCashValue`, `settledCash`, `buyingPower`, `availableFunds`, `excessMargin`, `realizedPnL`, `unrealizedPnL`, `cushion` | `volatile double` | `setNetLiquidation`, `setTotalCashValue`, `setSettledCash`, `setBuyingPower`, `setAvailableFunds`, `setExcessMargin`, `setRealizedPnL`, `setUnrealizedPnL`, `setCushion` |
+| `netLiquidation`, `totalCashValue`, `settledCash`, `buyingPower`, `availableFunds`, `excessLiquidity`, `realizedPnL`, `unrealizedPnL`, `cushion` | `volatile double` | `setNetLiquidation`, `setTotalCashValue`, `setSettledCash`, `setBuyingPower`, `setAvailableFunds`, `setExcessLiquidity`, `setRealizedPnL`, `setUnrealizedPnL`, `setCushion` |
 
 ### 3.4 `mwd.trading.strategy.AbstractStrategy`
 
@@ -340,7 +340,7 @@ Compare-and-set / read-modify-write call sites:
 |---|---|---|
 | `pendingEntries` | `final ConcurrentMap<String,PendingEntry>` | `evaluateNewEntry` (put), `acknowledgeStatusChange` (remove on `POSITION_OPEN`), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
 | `escalatedPendingEntries` | `final Set<String>` = `ConcurrentHashMap.newKeySet()` | `escalate` (add), `acknowledgeStatusChange` (remove on `POSITION_OPEN`), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
-| `acknowledgedStatus` | `final ConcurrentMap<String,BracketOrder.Status>` | `acknowledgeStatusChange` (`put`, and `remove` when the bracket is gone), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
+| `acknowledgedStatus` | `final ConcurrentMap<String,Acknowledged>` where `private record Acknowledged(String tradeId, BracketOrder.Status status)` | `acknowledgeStatusChange` (`put`, and `remove` when the bracket is gone), `cleanupOwnedLifecycle` (remove), `rollbackEntryReservation` (remove) |
 | `lastUnreadyReason` | `final ConcurrentMap<String,String>` | `entryInputsReady` (`put` / `remove`) |
 
 ### 3.5 `OneSigmaDownsideMeanReversionStrategy` and `OneSigmaUpsideMeanReversionStrategy`
@@ -555,7 +555,9 @@ Compare-and-set / read-modify-write call sites:
 | `MinuteVolumeTracker.VolumeWindow` | `sessionDate` | `LocalDate`, guarded by the window monitor | `commit` |
 | `MinuteVolumeTracker.VolumeWindow` | `pending` | `MinuteBar`, guarded by the window monitor | `setPending` |
 
-`SizeTickHandler`, `MinuteBarHandler`, `AccountEventHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, `UniverseReference`, and `ConcentrationLimits` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
+`SizeTickHandler`, `MinuteBarHandler`, `BrokerTimeHandler`, `NextValidIdHandler`, `IbkrErrorHandler`, `BracketOrderExecutor`, `UniverseReference`, and `ConcentrationLimits` declare no mutable instance fields; they mutate only the shared state listed in §3.1–§3.3 and §3.12–§3.17.
+
+`AccountEventHandler` holds one of its own: `reportedUnhandledKeys`, a `ConcurrentHashMap.newKeySet()` that makes the DEBUG line for an unread account tag fire once rather than on every batch. It is written only on the reader thread, and would be correct unsynchronized; the concurrent set states the intent rather than relying on that.
 
 ### 3.25 `mwd.trading.ui.BlackboardMonitor`
 

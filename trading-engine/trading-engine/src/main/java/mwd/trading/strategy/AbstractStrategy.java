@@ -64,8 +64,18 @@ public abstract class AbstractStrategy implements Runnable {
      * later poll the derived state looks identical. This records what has been
      * acted on, making the edge explicit instead of implicit in a timing gap.
      */
-    private final ConcurrentMap<String, BracketOrder.Status> acknowledgedStatus =
+    private final ConcurrentMap<String, Acknowledged> acknowledgedStatus =
             new ConcurrentHashMap<>();
+
+    /**
+     * One observed broker status, tied to the trade it belonged to.
+     *
+     * <p>
+     * The trade id is what stops a value left over from an earlier trade on the
+     * same ticker being mistaken for the current one. Statuses repeat across
+     * trades; trade ids do not.
+     */
+    private record Acknowledged(String tradeId, BracketOrder.Status status) {}
 
     protected AbstractStrategy(
             StrategyBlackboard blackboard,
@@ -156,6 +166,16 @@ public abstract class AbstractStrategy implements Runnable {
                     }
                     return;
                 }
+                // The reader thread may have finished the trade itself.
+                // OrderLifecycleHandler.completeConfirmedFlat clears the bracket
+                // and releases the ticker in the same call, on every terminal
+                // path, so this strategy can arrive here having never once
+                // observed FLAT while it still held the reservation. Anything
+                // still in the per-ticker maps is that trade, and closing it out
+                // is owed before another entry is considered on this symbol.
+                if (hasUnfinishedLifecycle(ticker)) {
+                    cleanupOwnedLifecycle(stock, strategyId, stock.getActiveBracket());
+                }
                 evaluateNewEntry(stock, strategyId);
             }
             case PENDING -> {
@@ -194,16 +214,26 @@ public abstract class AbstractStrategy implements Runnable {
     private void acknowledgeStatusChange(Stock stock, String strategyId) {
         BracketOrder bracketOrder = stock.getActiveBracket();
         String ticker = stock.getTicker();
-        BracketOrder.Status status = bracketOrder == null ? null : bracketOrder.getStatus();
-
-        if (status == acknowledgedStatus.get(ticker)) {
-            return;
-        }
-        if (status == null) {
+        if (bracketOrder == null) {
             acknowledgedStatus.remove(ticker);
             return;
         }
-        acknowledgedStatus.put(ticker, status);
+
+        BracketOrder.Status status = bracketOrder.getStatus();
+        Acknowledged seen = acknowledgedStatus.get(ticker);
+        // Matched on the trade as well as the status. A status alone would let a
+        // leftover entry from an earlier trade on this ticker read as already
+        // acknowledged: a previous order that reached WORKING_PARENT and then
+        // died unfilled leaves that value behind, and the next order rests at
+        // WORKING_PARENT too. The engine-wide lock is released here and nowhere
+        // else for a resting parent, so being fooled once parks every strategy
+        // until that order fills or terminates.
+        if (seen != null
+                && seen.status() == status
+                && Objects.equals(seen.tradeId(), bracketOrder.getTradeId())) {
+            return;
+        }
+        acknowledgedStatus.put(ticker, new Acknowledged(bracketOrder.getTradeId(), status));
 
         switch (status) {
             case WORKING_PARENT ->
@@ -394,20 +424,48 @@ public abstract class AbstractStrategy implements Runnable {
         }
     }
 
+    /**
+     * Closes this strategy's books on a finished trade.
+     *
+     * <p>
+     * Reached from two directions. Either this strategy observed the terminal
+     * bracket while it still held the ticker, or the reader thread completed the
+     * trade first and released the ticker before this strategy ever saw it - the
+     * ordinary case, since {@code completeConfirmedFlat} does both in one call.
+     * The two blackboard releases are therefore expected to be no-ops on the
+     * second path; both compare the caller against the recorded owner and decline
+     * when it does not match.
+     */
     private void cleanupOwnedLifecycle(
             Stock stock, String strategyId, BracketOrder bracketOrder) {
-        onPositionClosed(stock);
-        blackboard.releaseGlobalPending(strategyId, stock.getTicker());
-        blackboard.releasePosition(stock.getTicker(), strategyId);
-        pendingEntries.remove(stock.getTicker());
-        escalatedPendingEntries.remove(stock.getTicker());
-        acknowledgedStatus.remove(stock.getTicker());
-        if (tickStreamController.isStreamActive(stock.getTicker())) {
-            tickStreamController.cancelStream(stock.getTicker());
+        String ticker = stock.getTicker();
+        // Local bookkeeping goes first, so that a strategy hook which throws
+        // cannot leave this ticker in a state that runs the whole cleanup again
+        // on the next poll, and every poll after it.
+        pendingEntries.remove(ticker);
+        escalatedPendingEntries.remove(ticker);
+        acknowledgedStatus.remove(ticker);
+        blackboard.releaseGlobalPending(strategyId, ticker);
+        blackboard.releasePosition(ticker, strategyId);
+        if (tickStreamController.isStreamActive(ticker)) {
+            tickStreamController.cancelStream(ticker);
         }
         if (bracketOrder == null || isConfirmedTerminal(bracketOrder.getStatus())) {
             stock.setActiveBracket(null);
         }
+        onPositionClosed(stock);
+    }
+
+    /**
+     * Whether this strategy still has per-ticker state from a trade it never
+     * closed out. True means a trade of ours ended without this strategy running
+     * its own cleanup, which is what happens whenever the reader thread reaches
+     * the terminal status first.
+     */
+    private boolean hasUnfinishedLifecycle(String ticker) {
+        return pendingEntries.containsKey(ticker)
+                || acknowledgedStatus.containsKey(ticker)
+                || escalatedPendingEntries.contains(ticker);
     }
 
     /**

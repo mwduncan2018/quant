@@ -58,10 +58,14 @@ public final class ConcentrationLimits {
     /**
      * @param maxTickerExposurePercent percent of net liquidation, so 30 means 30%
      * @param maxSectorExposurePercent percent of net liquidation, so 50 means 50%
-     * @param minPositionNotional      below this the entry is refused rather than
-     *                                 trimmed, because a position small enough
-     *                                 gives its edge back in commission and spread
-     *                                 while still consuming a position slot
+     * @param minPositionNotional      floor on what a <em>trim</em> may leave. Below
+     *                                 it the entry is refused rather than shipped,
+     *                                 because a position that small gives its edge
+     *                                 back in commission and spread while still
+     *                                 consuming a position slot. It is deliberately
+     *                                 not a floor on strategy sizing in general: a
+     *                                 strategy that asks for a small position and
+     *                                 fits inside the caps is left alone
      */
     public ConcentrationLimits(
             Blackboard blackboard,

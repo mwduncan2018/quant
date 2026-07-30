@@ -18,3 +18,11 @@ dev = [
     "grpcio-tools>=1.82",
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+# The modules under test sit at the project root, and a bare `pytest` does not
+# put the working directory on sys.path the way `python -m pytest` does. Without
+# this every test module fails to import, which made the documented command in
+# the README collect nothing.
+pythonpath = ["."]
+testpaths = ["tests"]

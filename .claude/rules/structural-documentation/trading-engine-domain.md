@@ -41,8 +41,8 @@ public double getBuyingPower()
 public void setBuyingPower(double val)
 public double getAvailableFunds()
 public void setAvailableFunds(double val)
-public double getExcessMargin()
-public void setExcessMargin(double val)
+public double getExcessLiquidity()
+public void setExcessLiquidity(double val)
 public double getRealizedPnL()
 public void setRealizedPnL(double val)
 public double getUnrealizedPnL()
@@ -55,7 +55,7 @@ public void setCushion(double val)
 
 **Concurrent collections**
 
-None. All fields are `volatile` scalars (`accountId`, `netLiquidation`, `totalCashValue`, `settledCash`, `buyingPower`, `availableFunds`, `excessMargin`, `realizedPnL`, `unrealizedPnL`, `cushion`, `lastRefreshedAtMillis`) mutated by the setters and read by the getters listed above.
+None. All fields are `volatile` scalars (`accountId`, `netLiquidation`, `totalCashValue`, `settledCash`, `buyingPower`, `availableFunds`, `excessLiquidity`, `realizedPnL`, `unrealizedPnL`, `cushion`, `lastRefreshedAtMillis`) mutated by the setters and read by the getters listed above.
 
 **Centralized state objects**
 

@@ -166,14 +166,14 @@ Traces a new entry from the strategy poll loop through bracket construction and
     **Receiving Component:** `ReconciliationManager`, `OrderRegistry`, `BracketOrder`
 
 29. **Initiating Component:** `OrderLifecycleHandler.onOrderStatus(...)` for the parent leg
-    **Method Invocation:** `bracketOrder.setFilledQuantity(Decimal)` / `setRemainingQuantity(Decimal)`; `"Filled"` → `setStatus(POSITION_OPEN)` + `markPositionOpen(BracketOrder, Stock)`; a non-zero partial fill → `setStatus(PARTIAL_PARENT)` + `markPositionOpen` + `halt(String)`; a working status → `setStatus(WORKING_PARENT)`
+    **Method Invocation:** `bracketOrder.setFilledQuantity(Decimal)` / `setRemainingQuantity(Decimal)`; `"Filled"` → `setStatus(POSITION_OPEN)` + `markPositionOpen(BracketOrder)`; a non-zero partial fill → `setStatus(PARTIAL_PARENT)` + `markPositionOpen` + `halt(String)`; a working status → `setStatus(WORKING_PARENT)`
     **Receiving Component:** `BracketOrder`, `Stock`, `Blackboard`, `TradingGate`
 
 30. **Initiating Component:** `OrderLifecycleHandler.onOrderStatus(...)` for an exit leg
     **Method Invocation:** `bracketOrder.getSliceByOrderId(int)` → `filledSlice.setFilled(true)`; when every slice reports `isFilled()` → `setStatus(FILLED)` + `completeConfirmedFlat(BracketOrder)`
     **Receiving Component:** `BracketOrder.ExitSlice`, `BracketOrder`, `Stock`, `Blackboard`
 
-31. **Initiating Component:** `OrderLifecycleHandler.markPositionOpen(BracketOrder, Stock)`
+31. **Initiating Component:** `OrderLifecycleHandler.markPositionOpen(BracketOrder)`
     **Method Invocation:** `blackboard.releaseGlobalPending(String, String)`. No position state is written; `OPEN` follows from the `Status` the caller set on the bracket
     **Receiving Component:** `Stock`, `Blackboard`
 
@@ -212,14 +212,14 @@ Traces a new entry from the strategy poll loop through bracket construction and
     **Receiving Component:** `AbstractStrategy`
 
 40. **Initiating Component:** `AbstractStrategy.acknowledgeStatusChange(Stock, String)`
-    **Method Invocation:** returns immediately when `bracketOrder.getStatus()` equals the value recorded in `acknowledgedStatus`; otherwise records it and switches — `WORKING_PARENT` → `blackboard.releaseGlobalPending`; `PARTIAL_PARENT` → `releaseGlobalPending` + `escalate`; `POSITION_OPEN` → `releaseGlobalPending` and pending-entry cleanup; `CANCELLED`/`REJECTED` with a non-zero fill → `releaseGlobalPending` + `escalate`; `INITIALIZED` and `FILLED` carry no once-only work
+    **Method Invocation:** returns immediately when `bracketOrder.getStatus()` and `getTradeId()` both equal the pair recorded in `acknowledgedStatus`; otherwise records them and switches — `WORKING_PARENT` → `blackboard.releaseGlobalPending`; `PARTIAL_PARENT` → `releaseGlobalPending` + `escalate`; `POSITION_OPEN` → `releaseGlobalPending` and pending-entry cleanup; `CANCELLED`/`REJECTED` with a non-zero fill → `releaseGlobalPending` + `escalate`; `INITIALIZED` and `FILLED` carry no once-only work
     **Receiving Component:** `BracketOrder`, `Blackboard`, `TradingGate`
 
 40a. **Initiating Component:** `AbstractStrategy.handlePendingEntry(Stock)`
     **Method Invocation:** the clock-driven half only — returns unless `pendingEntry == null || acknowledgementTimedOut(...)`, then escalates for a missing bracket or a still-`INITIALIZED` one. A clean terminal derives `FLAT` and is cleaned up through `handleFlatWithLocalOwnership` on the same cycle
     **Receiving Component:** `BracketOrder`, `Stock`, `Blackboard`, `TradingGate`
 
-41. **Initiating Component:** `AbstractStrategy.cleanupOwnedLifecycle(Stock, String, BracketOrder)`
+41. **Initiating Component:** `AbstractStrategy.cleanupOwnedLifecycle(Stock, String, BracketOrder)`, reached from `handleFlatWithLocalOwnership` or — the ordinary case, because `completeConfirmedFlat` releases the ticker on the reader thread — from the `FLAT` branch when `hasUnfinishedLifecycle(ticker)` reports leftover per-ticker state
     **Method Invocation:** `onPositionClosed(Stock)`, `blackboard.releaseGlobalPending`, `blackboard.releasePosition`, `tickStreamController.cancelStream(String)`, `stock.setActiveBracket(null)`
     **Receiving Component:** the concrete strategy, `Blackboard`, `TickByTickManager`, `Stock`
 

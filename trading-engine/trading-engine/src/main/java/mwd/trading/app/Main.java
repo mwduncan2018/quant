@@ -25,7 +25,6 @@ import mwd.trading.config.Config;
 import mwd.trading.config.EnvPropConfig;
 import mwd.trading.broker.ibkr.IdManager;
 import mwd.trading.risk.ConcentrationLimits;
-import mwd.trading.risk.MarginMethodology;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.broker.ibkr.RequestRegistry;
 import mwd.trading.marketdata.TickByTickManager;
