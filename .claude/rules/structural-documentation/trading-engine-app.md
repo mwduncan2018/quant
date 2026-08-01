@@ -5,7 +5,9 @@ paths:
 
 # Package `mwd.trading.app`
 
-Source: `trading-engine/trading-engine/src/main/java/mwd/trading/app/Main.java`
+Sources:
+- `trading-engine/trading-engine/src/main/java/mwd/trading/app/Main.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/app/StartupManifest.java`
 
 ---
 
@@ -15,7 +17,7 @@ Source: `trading-engine/trading-engine/src/main/java/mwd/trading/app/Main.java`
 
 ### 1. Class/Interface Responsibilities
 
-Process entry point that constructs every engine component, wires the `EWrapperRaptor` callback handlers, starts the refresher and strategy threads, registers a JVM shutdown hook, and blocks on a `CountDownLatch`.
+Process entry point that resolves and validates strategy activation before external activity, logs an immutable startup manifest, constructs every engine component, wires the `EWrapperRaptor` callback handlers, starts the refresher and enabled-strategy threads, registers a JVM shutdown hook, and blocks on a `CountDownLatch`.
 
 ### 2. Injected Dependencies
 
@@ -23,14 +25,15 @@ None. The class declares no constructor and is never instantiated; all collabora
 
 Types instantiated in `main(String[])`, in construction order:
 
-`EnvPropConfig`, `RequestRegistry`, `TickMap`, `IdManager`, `TimeManager`, `OrderRegistry`, `Blackboard`, `TradingGate`, `BrokerState`, `JsonTradingStateStore`, `ReconciliationManager`, `AccountEventHandler`, `OrderLifecycleHandler`, `MarketDataInputStore`, `IntradayWilderAtrTracker`, `DailyWilderAtrCalculator`, `IbkrErrorHandler`, `SimpleMovingAverageTracker`, `NextValidIdHandler`, `RsiTracker`, `MinuteBarHandler`, `PriceTickHandler`, `SizeTickHandler`, `BrokerTimeHandler`, `MinuteVolumeTracker`, `EWrapperRaptor`, `IbkrSessionManager`, `MarketDataSubscriptionManager`, `TickByTickManager`, `OptionsIndicatorStore`, `OptionsIndicatorFrameReceiver`, `EarningsStore`, `EarningsClient`, `EarningsRefresher`, `MarketCalendarStore`, `MarketCalendarClient`, `MarketCalendarRefresher`, `UniverseReference`, `ConcentrationLimits`, `BlackboardMonitor`, `BracketOrderExecutor`, `TwoSigmaDownsideMeanReversionStrategy`, `OneSigmaDownsideMeanReversionStrategy`, `OneSigmaUpsideMeanReversionStrategy`.
+`EnvPropConfig`, `StrategyActivationPolicy`, `StartupManifest`, `RequestRegistry`, `TickMap`, `IdManager`, `TimeManager`, `OrderRegistry`, `Blackboard`, `TradingGate`, `BrokerState`, `JsonTradingStateStore`, `ReconciliationManager`, `AccountEventHandler`, `OrderLifecycleHandler`, `MarketDataInputStore`, `IntradayWilderAtrTracker`, `DailyWilderAtrCalculator`, `IbkrErrorHandler`, `SimpleMovingAverageTracker`, `NextValidIdHandler`, `RsiTracker`, `MinuteBarHandler`, `PriceTickHandler`, `SizeTickHandler`, `BrokerTimeHandler`, `MinuteVolumeTracker`, `EWrapperRaptor`, `IbkrSessionManager`, `MarketDataSubscriptionManager`, `TickByTickManager`, optional `OptionsIndicatorStore`/`OptionsIndicatorFrameReceiver` and `EarningsStore`/`EarningsClient`/`EarningsRefresher`, `MarketCalendarStore`, `MarketCalendarClient`, `MarketCalendarRefresher`, `UniverseReference`, `ConcentrationLimits`, optional `BlackboardMonitor`, `BracketOrderExecutor`, and only the enabled concrete strategies.
 
 ### 3. Method Signatures
 
 ```java
 public static void main(String[] args) throws Exception
 private static Thread strategyThread(AbstractStrategy strategy)
-private static void logStartupContext(Config config)
+private static void logStartupContext(Config config, StrategyActivationPolicy activationPolicy)
+private static String resolveSessionLogFile()
 private static void mirrorEarningsForMonitor(Blackboard blackboard, EarningsSnapshot snapshot)
 private static void mirrorFrameForMonitor(Blackboard blackboard, IndicatorFrame frame)
 ```
@@ -48,7 +51,7 @@ private static final long PROXY_IDLE_RECHECK_MS = 60_000L
 
 | Method | Interaction |
 | --- | --- |
-| `main(String[])` | Constructs the single `Blackboard` instance; passes `blackboard::getNextRequestId` as the `IntSupplier` to `ReconciliationManager`; passes the instance to `AccountEventHandler`, `OrderLifecycleHandler`, every indicator/market-data handler, `MarketDataSubscriptionManager`, `TickByTickManager`, `ConcentrationLimits`, `BlackboardMonitor`, `BracketOrderExecutor`, and all three strategies |
+| `main(String[])` | Constructs the single `Blackboard` instance; passes `blackboard::getNextRequestId` as the `IntSupplier` to `ReconciliationManager`; passes the instance to `AccountEventHandler`, `OrderLifecycleHandler`, every indicator/market-data handler, `MarketDataSubscriptionManager`, `TickByTickManager`, `ConcentrationLimits`, optional `BlackboardMonitor`, `BracketOrderExecutor`, and enabled strategies only |
 | `mirrorEarningsForMonitor(Blackboard, EarningsSnapshot)` | Mutates `Blackboard` state via `blackboard.getStock(ticker).setNextEarningsDate(Instant)` |
 | `mirrorFrameForMonitor(Blackboard, IndicatorFrame)` | Mutates `Blackboard` state via `blackboard.getStock(...).setDailyImpliedMove(double)` and `blackboard.getStock("SPY").setGammaFlip(double)` |
 
@@ -56,7 +59,7 @@ Both mirror methods reach the `ConcurrentHashMap<String, Stock>` inside `Blackbo
 
 **Concurrent collections**
 
-`main(String[])` holds no concurrent collection of its own. It creates `Set.copyOf(marketDataSymbols)` (immutable) for `ReconciliationManager`, `OptionsIndicatorStore`, and `EarningsStore`, and a `List<Thread>` of strategy threads that the shutdown hook iterates.
+`main(String[])` holds no concurrent collection of its own. `StrategyActivationPolicy` exposes immutable definition lists and produces the distinct sorted symbol list for enabled strategies only. `Main` creates `Set.copyOf(marketDataSymbols)` for `ReconciliationManager` and, when nonempty, `OptionsIndicatorStore` and `EarningsStore`; it freezes the enabled strategy thread list with `List.copyOf` before the shutdown hook captures it.
 
 **Thread lifecycle**
 
@@ -64,5 +67,30 @@ Both mirror methods reach the `ConcurrentHashMap<String, Stock>` inside `Blackbo
 | --- | --- |
 | `Earnings-Refresher-Thread` | `EarningsRefresher` (daemon) |
 | `Market-Calendar-Refresher-Thread` | `MarketCalendarRefresher` (daemon) |
-| `<StrategyClassSimpleName>-Thread` | each `AbstractStrategy` (daemon, via `strategyThread`) |
+| `<StrategyClassSimpleName>-Thread` | each enabled `AbstractStrategy` (daemon, via `strategyThread`) |
 | `Trading-Engine-Shutdown` | shutdown hook interrupting the above and closing `OptionsIndicatorFrameReceiver`, `IbkrSessionManager`, `ReconciliationManager` |
+
+---
+
+## `StartupManifest`
+
+`public record StartupManifest(TradingEnvironment tradingEnvironment, String accountSelection, int clientId, List<String> enabledStrategies, String tradingStateFile, String sessionLogFile)`
+
+### 1. Class/Interface Responsibilities
+
+Immutable startup identity record logged once as `STARTUP_MANIFEST`. It names the PAPER/LIVE environment, configured account or explicit TWS-managed-account sentinel, API client ID, enabled strategy IDs, absolute normalized journal path, and resolved log path.
+
+### 2. Injected Dependencies
+
+The canonical record constructor defensively copies `enabledStrategies` and rejects blank textual fields. `from(Config, StrategyActivationPolicy, String)` derives the record from resolved startup policy before external components are created.
+
+### 3. Method Signatures
+
+```java
+public static StartupManifest from(Config config, StrategyActivationPolicy activationPolicy, String sessionLogFile)
+public String toLogValue()
+```
+
+### 4. Global State Interactions
+
+None. All fields are immutable values; the enabled strategy list is `List.copyOf(...)`.

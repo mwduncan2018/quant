@@ -108,7 +108,7 @@ rates are read off IBKR's public margin calculator into
     **Receiving Component:** `Logger`
 
 16. **Initiating Component:** `Main.main(String[])`
-    **Method Invocation:** `new ConcentrationLimits(blackboard, universeReference, config.getMaxTickerExposurePercent(), config.getMaxSectorExposurePercent(), config.getMinPositionNotional())`, then passed to all three strategies
+    **Method Invocation:** `new ConcentrationLimits(blackboard, universeReference, config.getMaxTickerExposurePercent(), config.getMaxSectorExposurePercent(), config.getMinPositionNotional())`, then passed to every enabled strategy
     **Receiving Component:** `ConcentrationLimits`
 
 17. **Initiating Component:** `BlackboardMonitor.updateDashboardData()` (monitor refresh thread)

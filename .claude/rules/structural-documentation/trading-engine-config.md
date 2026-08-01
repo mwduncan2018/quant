@@ -17,7 +17,7 @@ Sources:
 
 ### 1. Class/Interface Responsibilities
 
-Declares the read-only accessors for every engine setting. Market-data quality (`isLiveIBKRData`) and the traded account (`isLiveTrading`) are separate accessors so that a real-time subscription can be enabled without redirecting order flow. Covers IBKR connection and account values, strategy poll rate and position cap, trading-state path, per-strategy symbol sets, options-proxy UDP settings, market-data age limit, earnings/calendar endpoint settings, the margin regime and per-ticker reference table, and the concentration caps.
+Declares the read-only accessors for every engine setting. Market-data quality (`isLiveIBKRData`) and the traded account (`isLiveTrading`) are separate accessors so that a real-time subscription can be enabled without redirecting order flow. Covers IBKR connection and account values, strategy poll rate and position cap, trading-state path, explicit per-strategy enablement and symbol sets, options-proxy UDP settings, market-data age limit, earnings/calendar endpoint settings, the margin regime and per-ticker reference table, and the concentration caps.
 
 `getMarginMethodology()` is the one setting with no default. Reg-T and Portfolio Margin size the same position differently and fail differently, and an engine that guessed wrong would size against a requirement the broker does not charge, so `requireMarginMethodology(String)` throws from the constructor rather than assume either one.
 
@@ -41,6 +41,7 @@ long getEntryAcknowledgementTimeoutMs()
 int getMaxActivePositions()
 long getReconnectDelayMs()
 String getTradingStatePath()
+boolean isStrategyEnabled(String strategyId)
 Set<String> getStrategyUniverse(String strategyId)
 Set<String> getStrategyReferenceSymbols(String strategyId)
 boolean isOptionsProxyEnabled()
@@ -143,6 +144,7 @@ private Set<String> symbolsFor(String strategyId, String suffix)
 @Override public int getMaxActivePositions()
 @Override public long getReconnectDelayMs()
 @Override public String getTradingStatePath()
+@Override public boolean isStrategyEnabled(String strategyId)
 @Override public Set<String> getStrategyUniverse(String strategyId)
 @Override public Set<String> getStrategyReferenceSymbols(String strategyId)
 @Override public boolean isOptionsProxyEnabled()
@@ -178,4 +180,4 @@ No reference to `Blackboard` or any other centralized state object.
 
 **Process-level state read**
 
-`initialize()` and `value(String, Properties, String)` read `System.getenv(String)`; `initialize()` reads the classpath resource `config.properties`. `initialize()` calls `requireCoherentDataAndTradingPair(boolean, boolean)`, which throws `IllegalStateException` when `LIVE_IBKR_TRADING` is true while `LIVE_IBKR_DATA` is false.
+`initialize()` and `value(String, Properties, String)` read `System.getenv(String)`; `initialize()` reads the classpath resource `config.properties`. `initialize()` calls `requireCoherentDataAndTradingPair(boolean, boolean)`, which throws `IllegalStateException` when `LIVE_IBKR_TRADING` is true while `LIVE_IBKR_DATA` is false. `isStrategyEnabled(String)` normalizes the stable strategy ID into `STRATEGY_<ID>_ENABLED`; an absent flag defaults to `false`, while the repository properties explicitly enable the three strategies for PAPER verification.

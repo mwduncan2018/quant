@@ -309,6 +309,14 @@ public class EnvPropConfig implements Config {
 	}
 
 	@Override
+	public boolean isStrategyEnabled(String strategyId) {
+		String normalizedId = strategyId.trim().toUpperCase(Locale.ROOT)
+				.replaceAll("[^A-Z0-9]+", "_");
+		return Boolean.parseBoolean(value(
+				"STRATEGY_" + normalizedId + "_ENABLED", properties, "false"));
+	}
+
+	@Override
 	public Set<String> getStrategyUniverse(String strategyId) {
 		return symbolsFor(strategyId, "UNIVERSE");
 	}

@@ -23,6 +23,7 @@ import mwd.trading.domain.TradeDirection;
 import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.persistence.JsonTradingStateStore;
 import mwd.trading.state.Blackboard;
+import mwd.trading.strategy.StrategyActivationPolicy;
 
 public class BracketOrderExecutor implements BracketOrderGateway {
     private static final Logger logger = LogManager.getLogger(BracketOrderExecutor.class);
@@ -31,18 +32,21 @@ public class BracketOrderExecutor implements BracketOrderGateway {
     private final TradingGate tradingGate;
     private final JsonTradingStateStore stateStore;
     private final Config config;
+    private final StrategyActivationPolicy strategyActivationPolicy;
 
     public BracketOrderExecutor(
             Blackboard blackboard,
             EClientSocket client,
             TradingGate tradingGate,
             JsonTradingStateStore stateStore,
-            Config config) {
+            Config config,
+            StrategyActivationPolicy strategyActivationPolicy) {
         this.blackboard = Objects.requireNonNull(blackboard);
         this.client = Objects.requireNonNull(client);
         this.tradingGate = Objects.requireNonNull(tradingGate);
         this.stateStore = Objects.requireNonNull(stateStore);
         this.config = Objects.requireNonNull(config);
+        this.strategyActivationPolicy = Objects.requireNonNull(strategyActivationPolicy);
     }
 
     /**
@@ -82,6 +86,7 @@ public class BracketOrderExecutor implements BracketOrderGateway {
         if (normalizedStrategyName.isEmpty()) {
             throw new IllegalArgumentException("strategyName must not be blank");
         }
+        strategyActivationPolicy.requireEntrySubmissionAllowed(normalizedStrategyName);
         TradeDirection normalizedDirection = Objects.requireNonNull(tradeDirection);
         validateEntryIntent(tickerSymbol, totalOrderQuantity, entryLimitPrice, sliceIntents);
         String actionDirection = normalizedDirection.entryAction();

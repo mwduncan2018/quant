@@ -8,9 +8,70 @@ paths:
 Sources:
 - `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/AbstractStrategy.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/EntryAdmission.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/StrategyDefinition.java`
+- `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/StrategyActivationPolicy.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/TwoSigmaDownsideMeanReversionStrategy.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/OneSigmaDownsideMeanReversionStrategy.java`
 - `trading-engine/trading-engine/src/main/java/mwd/trading/strategy/OneSigmaUpsideMeanReversionStrategy.java`
+
+---
+
+## `StrategyDefinition`
+
+`public record StrategyDefinition(String id, Set<TradingEnvironment> permittedEnvironments, boolean enabled, Set<String> universe, Set<String> referenceSymbols)`
+
+### 1. Class/Interface Responsibilities
+
+Immutable startup metadata for one strategy. The canonical constructor validates the stable ID and permitted environment set, normalizes trade/reference symbols to uppercase, removes blank symbols, and defensively copies every set.
+
+### 2. Injected Dependencies
+
+All five values are canonical record-constructor parameters. No service dependency is held.
+
+### 3. Method Signatures
+
+```java
+public boolean permits(TradingEnvironment environment)
+private static Set<String> normalizeSymbols(Set<String> symbols, String name)
+```
+
+### 4. Global State Interactions
+
+None. The record is immutable.
+
+---
+
+## `StrategyActivationPolicy`
+
+`public final class StrategyActivationPolicy`
+
+### 1. Class/Interface Responsibilities
+
+Resolves all known strategy definitions and validates them before `Main` creates any broker or background component. `TWO_SIGMA_DOWNSIDE` permits PAPER and LIVE; `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE` are permanently PAPER-only. Enabled strategies must permit the selected environment and have a nonempty universe. LIVE additionally requires nonblank `IBKR_EXPECTED_ACCOUNT`. Disabled strategies may have empty universes and do not contribute market-data symbols.
+
+### 2. Injected Dependencies
+
+Factory: `public static StrategyActivationPolicy from(Config config)`. The resolved `TradingEnvironment`, complete definitions, and enabled-definition projection are stored as immutable values.
+
+### 3. Method Signatures
+
+```java
+public static StrategyActivationPolicy from(Config config)
+public TradingEnvironment environment()
+public List<StrategyDefinition> definitions()
+public List<StrategyDefinition> enabledDefinitions()
+public List<String> enabledStrategyIds()
+public boolean isEnabled(String strategyId)
+public void requireEntrySubmissionAllowed(String strategyId)
+public Optional<StrategyDefinition> definition(String strategyId)
+public List<String> marketDataSymbols()
+private void validate()
+private static StrategyDefinition definition(Config config, String strategyId, Set<TradingEnvironment> permittedEnvironments)
+```
+
+### 4. Global State Interactions
+
+None. Construction reads `Config` once; the policy and its projections are immutable. `marketDataSymbols()` returns a distinct, sorted list formed only from enabled definitions. `BracketOrderExecutor` calls `requireEntrySubmissionAllowed(String)` immediately before its own entry-intent work, so disabled, unknown, or wrong-environment strategies cannot bypass the startup construction filter.
 
 ---
 

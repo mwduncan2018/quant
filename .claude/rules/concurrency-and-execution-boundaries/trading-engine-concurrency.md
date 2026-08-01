@@ -54,7 +54,7 @@ Executing on a strategy poll thread:
 | `TickByTickManager` (via `TickStreamController`) | `isStreamActive`, `tryRequestStream`, `cancelStream`, `executeRequest`, `isSlotAvailable` |
 | `Blackboard` via `StrategyBlackboard` | `getStock`, `getPositionOwner`, `tryReservePosition`, `releasePosition`, `isPositionOwnedBy`, `tryAcquireGlobalPending`, `releaseGlobalPending`, `isAccountCurrentForNewEntry`, `recordEntrySubmitted`, `getAccount`, `setSystemHalted`. A strategy holds the narrow type and cannot reach anything else on the blackboard |
 | `Blackboard` via `BracketOrderExecutor` | `getNextOrderId`, `getOrderRegistry`, `getStock` — reached on the strategy thread, but through the executor, which holds the full `Blackboard` |
-| `TradingGate` | `allowsNewEntries`, `allowsAutomatedOrderChanges`, `getMode`, `requireManualIntervention` |
+| `TradingGate` | `allowsNewEntries`, `allowsAutomatedOrderChanges`, `getMode`, `requireManualIntervention`; the Swing EDT is the production caller of `armLiveTrading` |
 | `MarketDataInputStore` (via `MarketDataFreshness`) | `areAllFresh`, `describeUnready`, `isFresh` — read side only |
 | `OptionsIndicatorStore` | `impliedMoveForNewEntry`, `gammaFlipForNewEntry`, `lastKnownImpliedMove`, `hasFreshFrame`, `tradingDate` — read side only |
 | `EarningsStore` | `earningsDate`, `daysUntilEarnings`, `isReadyFor`, `describeUnready` — read side only |
@@ -130,7 +130,7 @@ Single-threaded `ScheduledExecutorService`. Runs only the scheduled lambda `() -
 
 ### 1.10 `main` thread
 
-Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerState`, `JsonTradingStateStore`, `ReconciliationManager`, the callback handlers, `EWrapperRaptor`, `IbkrSessionManager`, `MarketDataSubscriptionManager`, `TickByTickManager`, `OptionsIndicatorStore`, `OptionsIndicatorFrameReceiver`, `EarningsStore`, `MarketCalendarStore`, `UniverseReference`, `ConcentrationLimits`, `BracketOrderExecutor`, and the three strategies. Calls `stateStore.recoveredFromBackup()`, `stateStore.activeTrades()`, `tradingGate.requireManualIntervention`, `wrapper.attachLifecycle`, `sessionManager.attachSubscriptionManager`, `optionsIndicatorFrameReceiver.start()`, `Thread::start` on every thread listed above, `sessionManager.start()`, `tickByTickManager.getActiveStreamCount()`, then blocks on `new CountDownLatch(1).await()`.
+Resolves `StrategyActivationPolicy` and logs `StartupManifest` before constructing `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerState`, `JsonTradingStateStore`, `ReconciliationManager`, the callback handlers, `EWrapperRaptor`, `IbkrSessionManager`, `MarketDataSubscriptionManager`, `TickByTickManager`, optional `OptionsIndicatorStore`/`OptionsIndicatorFrameReceiver` and `EarningsStore`, `MarketCalendarStore`, `UniverseReference`, `ConcentrationLimits`, `BracketOrderExecutor`, and enabled strategies only. Calls `stateStore.recoveredFromBackup()`, `stateStore.activeTrades()`, `tradingGate.requireManualIntervention`, `wrapper.attachLifecycle`, `sessionManager.attachSubscriptionManager`, optional `optionsIndicatorFrameReceiver.start()`, `Thread::start` on every constructed thread, `sessionManager.start()`, `tickByTickManager.getActiveStreamCount()`, then blocks on `new CountDownLatch(1).await()`.
 
 ### 1.11 `Trading-Engine-Shutdown` hook thread
 
@@ -138,7 +138,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 
 ### 1.12 Swing Event Dispatch Thread and monitor threads
 
-- EDT: `BlackboardMonitor` constructor, `updateView`, `applyColumnVisibility`, `updateButtonStyles`, `addAccountLabel`, `updateTableCellIfChanged`, `updatePnLLabel`, the body of the `updateDashboardData` `invokeLater` lambda, `startSiren` (called from inside that lambda), `performSystemStatusFade` (`Timer(50, …)`), `monitorTable.repaint()` (`Timer(33, …)`), `FlashCellRenderer.getTableCellRendererComponent`, and the `MouseAdapter` handlers.
+- EDT: `BlackboardMonitor` constructor, LIVE confirmation/arming, `updateLiveTradingControls`, `updateView`, `applyColumnVisibility`, `updateButtonStyles`, `addAccountLabel`, `updateTableCellIfChanged`, `updatePnLLabel`, the body of the `updateDashboardData` `invokeLater` lambda, `startSiren` (called from inside that lambda), `performSystemStatusFade` (`Timer(50, …)`), `monitorTable.repaint()` (`Timer(33, …)`), `FlashCellRenderer.getTableCellRendererComponent`, and the `MouseAdapter` handlers.
 - Monitor refresh daemon thread: the `startDataRefreshThread` loop, which calls `updateDashboardData()`; that method's entire body is inside `SwingUtilities.invokeLater`.
 - Siren audio daemon thread: the `startSiren` lambda, reading `currentFadeAlpha` and writing to `SourceDataLine`.
 
@@ -154,6 +154,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `Earnings-Refresher-Thread` | `EarningsStore.accepted` `AtomicReference` | strategy poll threads |
 | `Market-Calendar-Refresher-Thread` | `MarketCalendarStore.session` `AtomicReference` | strategy poll threads |
 | any | `TradingGate.state` `AtomicReference` | strategy poll threads |
+| Swing EDT | `TradingGate.liveTradingArmed` `AtomicBoolean` | strategy poll threads and executor |
 | monitor refresh thread | `SwingUtilities.invokeLater` | Swing EDT |
 | `main` | `SwingUtilities.invokeLater` | Swing EDT |
 
@@ -210,6 +211,7 @@ Constructs `RequestRegistry`, `TickMap`, `Blackboard`, `TradingGate`, `BrokerSta
 | `AtomicBoolean` | `initialized` | `MarketDataSubscriptionManager` |
 | `AtomicReference<EntryOwner>` | `globalPendingOwner` | `Blackboard` |
 | `AtomicReference<State>` | `state` | `TradingGate` |
+| `AtomicBoolean` | `liveTradingArmed` | `TradingGate` |
 | `AtomicReference<GammaFlip>` | `gammaFlip` | `OptionsIndicatorStore` |
 | `AtomicReference<Accepted>` | `accepted` | `EarningsStore` |
 | `AtomicReference<String>` | `lastRejectionReason` | `EarningsStore`, `MarketCalendarStore` |
@@ -227,6 +229,7 @@ Compare-and-set / read-modify-write call sites:
 | `globalPendingOwner.compareAndSet(currentOwner, null)` inside a retry loop | `Blackboard.releaseGlobalPending` |
 | `lastEntrySubmittedAtMillis.updateAndGet(previous -> Math.max(previous, atMillis))` | `Blackboard.recordEntrySubmitted` |
 | `state.updateAndGet(...)` with `MANUAL_INTERVENTION` retained unless target is `MANUAL_INTERVENTION` or `STOPPING` | `TradingGate.transitionTo` |
+| `liveTradingArmed.set(true)` after LIVE/READY checks and explicit Swing confirmation | `TradingGate.armLiveTrading` |
 | `requestId.accumulateAndGet(requestId, Math::max)`, `orderId.accumulateAndGet(orderId, Math::max)` | `IdManager.initializeRequestId`, `initializeOrderId` |
 | `requestId.getAndIncrement()`, `orderId.getAndIncrement()` | `IdManager.getNextRequestId`, `getNextOrderId` |
 | `apiReadyHandled.compareAndSet(false, true)` | `IbkrSessionManager.onNextValidId` |
@@ -402,6 +405,7 @@ Compare-and-set / read-modify-write call sites:
 | Field | Declaration | Mutating methods |
 |---|---|---|
 | `state` | `final AtomicReference<State>` | `transitionTo`, `requireManualIntervention` |
+| `liveTradingArmed` | `final AtomicBoolean` | `armLiveTrading` (never serialized; starts false in every process) |
 
 ### 3.12 `mwd.trading.execution.OrderRegistry`
 

@@ -2,6 +2,7 @@ package mwd.trading.lifecycle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -29,5 +30,40 @@ class TradingGateTest {
 
         gate.transitionTo(EngineMode.STOPPING, "shutdown");
         assertEquals(EngineMode.STOPPING, gate.getMode());
+    }
+
+    @Test
+    void liveEntryPermissionRequiresVolatileArmingAfterReadiness() {
+        TradingGate gate = new TradingGate(true);
+
+        assertTrue(gate.requiresLiveTradingArming());
+        assertFalse(gate.isLiveTradingArmed());
+        assertThrows(IllegalStateException.class, gate::armLiveTrading);
+
+        gate.transitionTo(EngineMode.READY, "reconciled");
+        assertFalse(gate.allowsNewEntries());
+        assertTrue(gate.allowsAutomatedOrderChanges());
+
+        gate.armLiveTrading();
+        assertTrue(gate.isLiveTradingArmed());
+        assertTrue(gate.allowsNewEntries());
+
+        gate.transitionTo(EngineMode.DEGRADED, "connection lost");
+        assertFalse(gate.allowsNewEntries());
+
+        TradingGate restartedProcess = new TradingGate(true);
+        restartedProcess.transitionTo(EngineMode.READY, "reconciled");
+        assertFalse(restartedProcess.isLiveTradingArmed());
+        assertFalse(restartedProcess.allowsNewEntries());
+    }
+
+    @Test
+    void paperGateCannotArmLiveTrading() {
+        TradingGate paperGate = new TradingGate();
+        paperGate.transitionTo(EngineMode.READY, "reconciled");
+
+        assertThrows(IllegalStateException.class, paperGate::armLiveTrading);
+        assertFalse(paperGate.isLiveTradingArmed());
+        assertTrue(paperGate.allowsNewEntries());
     }
 }

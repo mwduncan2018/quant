@@ -29,6 +29,10 @@ public interface Config {
 	int getMaxActivePositions();
 	long getReconnectDelayMs();
 	String getTradingStatePath();
+
+	/** Explicit startup enablement for a stable strategy ID. */
+	boolean isStrategyEnabled(String strategyId);
+
 	Set<String> getStrategyUniverse(String strategyId);
 	Set<String> getStrategyReferenceSymbols(String strategyId);
 

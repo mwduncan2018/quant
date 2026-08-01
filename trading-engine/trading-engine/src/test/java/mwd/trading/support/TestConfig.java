@@ -4,7 +4,7 @@ import java.util.Set;
 
 import mwd.trading.config.Config;
 
-public final class TestConfig implements Config {
+public class TestConfig implements Config {
     private final int maxActivePositions;
     private final long acknowledgementTimeoutMs;
     private final Set<String> universe;
@@ -28,6 +28,7 @@ public final class TestConfig implements Config {
     @Override public int getMaxActivePositions() { return maxActivePositions; }
     @Override public long getReconnectDelayMs() { return 1; }
     @Override public String getTradingStatePath() { return "target/test-state.json"; }
+    @Override public boolean isStrategyEnabled(String strategyId) { return true; }
     @Override public Set<String> getStrategyUniverse(String strategyId) { return universe; }
     @Override public Set<String> getStrategyReferenceSymbols(String strategyId) { return Set.of(); }
     @Override public boolean isOptionsProxyEnabled() { return true; }

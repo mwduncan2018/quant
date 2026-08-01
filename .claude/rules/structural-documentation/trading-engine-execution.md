@@ -201,11 +201,11 @@ None declared.
 
 ### 1. Class/Interface Responsibilities
 
-Builds the IBKR `Order` bundle for a parent entry plus per-slice take-profit, stop-loss, and time-exit legs, validates the intent, registers the `BracketOrder`, persists it, and submits or updates the orders through `EClientSocket`.
+Builds the IBKR `Order` bundle for a parent entry plus per-slice take-profit, stop-loss, and time-exit legs, rechecks immutable strategy activation at the final outbound boundary, validates the intent, registers the `BracketOrder`, persists it, and submits or updates the orders through `EClientSocket`.
 
 ### 2. Injected Dependencies
 
-Constructor: `public BracketOrderExecutor(Blackboard blackboard, EClientSocket client, TradingGate tradingGate, JsonTradingStateStore stateStore, Config config)`
+Constructor: `public BracketOrderExecutor(Blackboard blackboard, EClientSocket client, TradingGate tradingGate, JsonTradingStateStore stateStore, Config config, StrategyActivationPolicy strategyActivationPolicy)`
 
 | Parameter | Exact type |
 | --- | --- |
@@ -214,15 +214,16 @@ Constructor: `public BracketOrderExecutor(Blackboard blackboard, EClientSocket c
 | `tradingGate` | `mwd.trading.lifecycle.TradingGate` |
 | `stateStore` | `mwd.trading.persistence.JsonTradingStateStore` |
 | `config` | `mwd.trading.config.Config` |
+| `strategyActivationPolicy` | `mwd.trading.strategy.StrategyActivationPolicy` |
 
-All five are `Objects.requireNonNull`-checked.
+All six are `Objects.requireNonNull`-checked.
 
 ### 3. Method Signatures
 
 Nested type: `public static class SliceIntent` with public fields `Decimal quantity`, `double takeProfitPrice`, `double stopLossPrice`, `long timeExit` and constructor `public SliceIntent(Decimal quantity, double takeProfitPrice, double stopLossPrice, long timeExit)`.
 
 ```java
-public BracketOrderExecutor(Blackboard blackboard, EClientSocket client, TradingGate tradingGate, JsonTradingStateStore stateStore, Config config)
+public BracketOrderExecutor(Blackboard blackboard, EClientSocket client, TradingGate tradingGate, JsonTradingStateStore stateStore, Config config, StrategyActivationPolicy strategyActivationPolicy)
 
 @Override public BracketOrder placeTripleThreat(String strategyName, TradeDirection tradeDirection, String tickerSymbol, Decimal totalOrderQuantity, double entryLimitPrice, List<SliceIntent> sliceIntents)
 @Override public void updateTripleThreatExits(Stock stock, BracketOrder bracketOrder, BracketOrder.ExitSlice exitSlice, double newTakeProfitPrice, double newStopLossPrice, long newExitTime)
@@ -246,7 +247,7 @@ Holds none of its own. Reaches the four `ConcurrentHashMap` instances inside `Or
 
 | Method | Interaction |
 | --- | --- |
-| `placeTripleThreat(...)` | Reads `blackboard.getStock(String)`; mutates `blackboard.getNextOrderId()` (parent and every slice leg); mutates `blackboard.getOrderRegistry().register(BracketOrder)` and, on persistence failure, `unregister(BracketOrder)`; mutates `stock.setActiveBracket(BracketOrder)`; reads `blackboard.getAccount().getAccountId()` via `configuredAccount()`; reads `tradingGate.allowsNewEntries()` and `tradingGate.getMode()` |
+| `placeTripleThreat(...)` | Reads `tradingGate.allowsNewEntries()` and calls `strategyActivationPolicy.requireEntrySubmissionAllowed(strategyName)` before state writes; then reads `blackboard.getStock(String)`; mutates `blackboard.getNextOrderId()` (parent and every slice leg); mutates `blackboard.getOrderRegistry().register(BracketOrder)` and, on persistence failure, `unregister(BracketOrder)`; mutates `stock.setActiveBracket(BracketOrder)`; reads `blackboard.getAccount().getAccountId()` via `configuredAccount()` |
 | `updateTripleThreatExits(...)` | Reads `tradingGate.allowsAutomatedOrderChanges()` and `getMode()`; reads `stock.getPositionSize()`, `stock.getContract()`; mutates the `ExitSlice` prices and `bracketOrder.incrementUpdateCount()` |
 | `configuredAccount()` | Reads `config.getExpectedAccount()` and `blackboard.getAccount().getAccountId()` |
 | `persistIntent(BracketOrder, String)` | Calls `stateStore.recordIntent(BracketOrder, String)` |

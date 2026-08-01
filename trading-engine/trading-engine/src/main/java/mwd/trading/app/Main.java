@@ -3,10 +3,10 @@ package mwd.trading.app;
 import java.nio.file.Path;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
-import java.util.stream.Stream;
 
 import javax.swing.SwingUtilities;
 
@@ -64,6 +64,7 @@ import mwd.trading.execution.BracketOrderExecutor;
 import mwd.trading.strategy.AbstractStrategy;
 import mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy;
 import mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy;
+import mwd.trading.strategy.StrategyActivationPolicy;
 import mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy;
 
 public class Main {
@@ -78,19 +79,10 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         Config config = new EnvPropConfig();
-        logStartupContext(config);
+        StrategyActivationPolicy activationPolicy = StrategyActivationPolicy.from(config);
+        logStartupContext(config, activationPolicy);
         // Every symbol either strategy trades or references needs market data.
-        List<String> marketDataSymbols = Stream.of(
-                config.getStrategyUniverse(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID),
-                config.getStrategyReferenceSymbols(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID),
-                config.getStrategyUniverse(OneSigmaDownsideMeanReversionStrategy.STRATEGY_ID),
-                config.getStrategyReferenceSymbols(OneSigmaDownsideMeanReversionStrategy.STRATEGY_ID),
-                config.getStrategyUniverse(OneSigmaUpsideMeanReversionStrategy.STRATEGY_ID),
-                config.getStrategyReferenceSymbols(OneSigmaUpsideMeanReversionStrategy.STRATEGY_ID))
-                .flatMap(Set::stream)
-                .distinct()
-                .sorted()
-                .toList();
+        List<String> marketDataSymbols = activationPolicy.marketDataSymbols();
         RequestRegistry registry = new RequestRegistry();
         TickMap tickMap = new TickMap(config);
         Blackboard blackboard = new Blackboard(
@@ -99,7 +91,7 @@ public class Main {
                 new OrderRegistry(),
                 config);
 
-        TradingGate tradingGate = new TradingGate();
+        TradingGate tradingGate = new TradingGate(config.isLiveTrading());
         BrokerState brokerState = new BrokerState();
         JsonTradingStateStore stateStore = new JsonTradingStateStore(Path.of(config.getTradingStatePath()));
         if (stateStore.recoveredFromBackup()) {
@@ -154,18 +146,23 @@ public class Main {
         TickByTickManager tickByTickManager = new TickByTickManager(
                 blackboard, sessionManager.client(), registry);
 
-        OptionsIndicatorStore optionsIndicatorStore = new OptionsIndicatorStore(
-                Set.copyOf(marketDataSymbols),
-                config.getOptionsProxyFrameMaxAgeMs());
+        OptionsIndicatorStore optionsIndicatorStore = null;
         OptionsIndicatorFrameReceiver optionsIndicatorFrameReceiver = null;
-        if (config.isOptionsProxyEnabled()) {
+        if (marketDataSymbols.isEmpty()) {
+            logger.info("No strategies are enabled; skipping the options-indicator store and receiver");
+        } else {
+            optionsIndicatorStore = new OptionsIndicatorStore(
+                    Set.copyOf(marketDataSymbols),
+                    config.getOptionsProxyFrameMaxAgeMs());
+        }
+        if (optionsIndicatorStore != null && config.isOptionsProxyEnabled()) {
             optionsIndicatorFrameReceiver = new OptionsIndicatorFrameReceiver(
                     optionsIndicatorStore,
                     config.getOptionsProxyBindHost(),
                     config.getOptionsProxyUdpPort(),
                     frame -> mirrorFrameForMonitor(blackboard, frame));
             optionsIndicatorFrameReceiver.start();
-        } else {
+        } else if (optionsIndicatorStore != null) {
             logger.warn("OPTIONS_PROXY_ENABLED is false; no options indicators will be received "
                     + "and no strategy that depends on them can open a position");
         }
@@ -173,9 +170,11 @@ public class Main {
         // Earnings dates are pulled rather than broadcast: they are fetched once
         // each morning by the proxy and static for the session, so a
         // request/response lifecycle fits where a 1 Hz stream would not.
-        EarningsStore earningsStore = new EarningsStore(Set.copyOf(marketDataSymbols));
+        EarningsStore earningsStore = marketDataSymbols.isEmpty()
+                ? null
+                : new EarningsStore(Set.copyOf(marketDataSymbols));
         Thread earningsRefresherThread = null;
-        if (config.isEarningsEnabled()) {
+        if (earningsStore != null && config.isEarningsEnabled()) {
             EarningsRefresher earningsRefresher = new EarningsRefresher(
                     new EarningsClient(
                             config.getEarningsEndpointUrl(),
@@ -188,7 +187,7 @@ public class Main {
             earningsRefresherThread = new Thread(earningsRefresher, "Earnings-Refresher-Thread");
             earningsRefresherThread.setDaemon(true);
             earningsRefresherThread.start();
-        } else {
+        } else if (earningsStore != null) {
             logger.warn("EARNINGS_ENABLED is false; no earnings dates will be retrieved "
                     + "and any strategy that depends on them cannot open a position");
         }
@@ -242,19 +241,33 @@ public class Main {
                         age, config.getUniverseReferenceMaxAgeDays()));
 
         if (config.showUI()) {
-            SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard, universeReference));
+            SwingUtilities.invokeLater(() -> new BlackboardMonitor(
+                    blackboard,
+                    universeReference,
+                    tradingGate,
+                    config.isLiveTrading(),
+                    config.getExpectedAccount()));
+        } else if (config.isLiveTrading()) {
+            logger.warn("LIVE trading is permanently disarmed for this process because SHOW_UI "
+                    + "is false; monitor-only operation is allowed, but no new entry can be sent");
         }
 
         OptionsIndicatorFrameReceiver receiverForShutdown = optionsIndicatorFrameReceiver;
         Thread earningsRefresherForShutdown = earningsRefresherThread;
         Thread marketCalendarForShutdown = marketCalendarThread;
-        // Order execution. Both strategies submit through the same executor, so
+        // Order execution. Every enabled strategy submits through the same executor, so
         // the trading gate and the local journal see every order from one place.
         BracketOrderExecutor bracketOrderExecutor = new BracketOrderExecutor(
-                blackboard, sessionManager.client(), tradingGate, stateStore, config);
+                blackboard,
+                sessionManager.client(),
+                tradingGate,
+                stateStore,
+                config,
+                activationPolicy);
 
-        List<Thread> strategyThreads = List.of(
-                strategyThread(new TwoSigmaDownsideMeanReversionStrategy(
+        List<Thread> mutableStrategyThreads = new ArrayList<>();
+        if (activationPolicy.isEnabled(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID)) {
+            mutableStrategyThreads.add(strategyThread(new TwoSigmaDownsideMeanReversionStrategy(
                         blackboard,
                         bracketOrderExecutor,
                         tickByTickManager,
@@ -265,19 +278,10 @@ public class Main {
                         concentrationLimits,
                         optionsIndicatorStore,
                         earningsStore,
-                        marketCalendarStore)),
-                strategyThread(new OneSigmaDownsideMeanReversionStrategy(
-                        blackboard,
-                        bracketOrderExecutor,
-                        tickByTickManager,
-                        config,
-                        tradingGate,
-                        marketDataInputStore,
-                        universeReference,
-                        concentrationLimits,
-                        optionsIndicatorStore,
-                        marketCalendarStore)),
-                strategyThread(new OneSigmaUpsideMeanReversionStrategy(
+                        marketCalendarStore)));
+        }
+        if (activationPolicy.isEnabled(OneSigmaDownsideMeanReversionStrategy.STRATEGY_ID)) {
+            mutableStrategyThreads.add(strategyThread(new OneSigmaDownsideMeanReversionStrategy(
                         blackboard,
                         bracketOrderExecutor,
                         tickByTickManager,
@@ -288,6 +292,21 @@ public class Main {
                         concentrationLimits,
                         optionsIndicatorStore,
                         marketCalendarStore)));
+        }
+        if (activationPolicy.isEnabled(OneSigmaUpsideMeanReversionStrategy.STRATEGY_ID)) {
+            mutableStrategyThreads.add(strategyThread(new OneSigmaUpsideMeanReversionStrategy(
+                        blackboard,
+                        bracketOrderExecutor,
+                        tickByTickManager,
+                        config,
+                        tradingGate,
+                        marketDataInputStore,
+                        universeReference,
+                        concentrationLimits,
+                        optionsIndicatorStore,
+                        marketCalendarStore)));
+        }
+        List<Thread> strategyThreads = List.copyOf(mutableStrategyThreads);
         strategyThreads.forEach(Thread::start);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -338,7 +357,12 @@ public class Main {
      * The path is read back from the appender rather than from the environment,
      * so it cannot drift from {@code log4j2.xml}.
      */
-    private static void logStartupContext(Config config) {
+    private static void logStartupContext(
+            Config config, StrategyActivationPolicy activationPolicy) {
+        String sessionLogFile = resolveSessionLogFile();
+        StartupManifest startupManifest = StartupManifest.from(
+                config, activationPolicy, sessionLogFile);
+        logger.info("STARTUP_MANIFEST {}", startupManifest.toLogValue());
         logger.info("Trading engine starting: IBKR data is {}, market-data type {}, "
                 + "strategy poll rate {}ms",
                 config.isLiveIBKRData() ? "LIVE" : "DELAYED/PAPER",
@@ -348,20 +372,24 @@ public class Main {
                 config.getMarketDataMaxAgeMs(),
                 config.getOptionsProxyFrameMaxAgeMs());
         logger.info("Trading state journal: {}", Path.of(config.getTradingStatePath()).toAbsolutePath());
+    }
 
+    private static String resolveSessionLogFile() {
         try {
             LoggerContext context = (LoggerContext) LogManager.getContext(false);
             Appender appender = context.getConfiguration().getAppender("EngineFile");
             if (appender instanceof RollingFileAppender rollingFileAppender) {
-                logger.info("Session log: {}",
-                        Path.of(rollingFileAppender.getFileName()).toAbsolutePath());
-            } else {
-                logger.warn("No rolling file appender is configured; this session leaves "
-                        + "no reviewable record once the console buffer is gone");
+                return Path.of(rollingFileAppender.getFileName())
+                        .toAbsolutePath()
+                        .normalize()
+                        .toString();
             }
+            logger.warn("No rolling file appender is configured; this session leaves "
+                    + "no reviewable record once the console buffer is gone");
         } catch (RuntimeException exception) {
             logger.warn("Could not resolve the engine log file location: {}", exception.toString());
         }
+        return StartupManifest.UNAVAILABLE_LOG_FILE;
     }
 
     /**

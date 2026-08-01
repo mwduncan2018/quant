@@ -17,6 +17,7 @@ class EnvPropConfigTest {
     void strategyTradeUniverseIsSeparateFromReferenceSymbols() {
         Config config = new EnvPropConfig();
 
+        assertTrue(config.isStrategyEnabled(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID));
         assertTrue(config.getStrategyUniverse(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID).contains("AAPL"));
         assertFalse(config.getStrategyUniverse(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID).contains("SPY"));
         assertTrue(config.getStrategyReferenceSymbols(TwoSigmaDownsideMeanReversionStrategy.STRATEGY_ID).contains("SPY"));

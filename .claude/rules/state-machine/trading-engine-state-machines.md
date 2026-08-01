@@ -87,8 +87,8 @@ Consequences worth stating, all verbatim from the source:
 - **Owning class:** `mwd.trading.lifecycle.TradingGate`
 - **Owning field:** `private final AtomicReference<State> state = new AtomicReference<>(new State(EngineMode.STARTING, "Application starting", System.currentTimeMillis()));`
 - **State record:** `public record State(EngineMode mode, String reason, long changedAtEpochMillis)`
-- **Readers:** `getState()`, `getMode()`, `allowsNewEntries()` (`getMode() == EngineMode.READY`), `allowsAutomatedOrderChanges()` (`getMode() == EngineMode.READY`)
-- **Writers:** `transitionTo(EngineMode, String)`, `requireManualIntervention(String)`
+- **Readers:** `getState()`, `getMode()`, `allowsNewEntries()` (`READY` and, for LIVE, process-local arming), `allowsAutomatedOrderChanges()` (`getMode() == EngineMode.READY`), `requiresLiveTradingArming()`, `isLiveTradingArmed()`
+- **Writers:** `transitionTo(EngineMode, String)`, `requireManualIntervention(String)`, and Swing-confirmed `armLiveTrading()` for the independent LIVE-entry arm
 
 #### `BlackboardMonitor.ViewState` — UI column visibility
 
@@ -343,6 +343,11 @@ document.
   2. `epoch.complete()` — `positionsComplete && openOrdersComplete && completedOrdersComplete && executionsComplete`
   3. `differences.isEmpty()` where `differences = compare(snapshot, stateStore.snapshot())`
 
+`READY` is necessary but not sufficient for a LIVE new entry. A LIVE gate starts
+with `liveTradingArmed == false`; only the Swing confirmation path may call
+`armLiveTrading()` while `READY`. The arm is process-local, is never serialized,
+and does not gate protective order changes.
+
 #### -> DEGRADED
 
 - **Controlling Method:** `public synchronized void onDisconnected(String reason)` (`ReconciliationManager`); sets `activeEpoch = null` first
@@ -587,7 +592,7 @@ No source location resets `systemHalted`, `systemUpdateRequired`, `openOrderEnd`
 | `isWorkingStatus(String status)` | `OrderLifecycleHandler` | `"PendingSubmit"`, `"PreSubmitted"`, `"Submitted"`, or `"PendingCancel"` (case-insensitive) |
 | `isTerminalOrderStatus(String status)` | `ReconciliationManager` | `"Filled"`, `"Cancelled"`, `"ApiCancelled"`, or `"Inactive"` (case-insensitive) |
 | `isAccountCurrentForNewEntry()` | `Blackboard` | `refreshedAt > 0 && refreshedAt > lastEntrySubmittedAtMillis.get()` |
-| `allowsNewEntries()` | `TradingGate` | `getMode() == EngineMode.READY` |
+| `allowsNewEntries()` | `TradingGate` | `getMode() == EngineMode.READY && (!liveTradingArmingRequired || liveTradingArmed.get())` |
 | `allowsAutomatedOrderChanges()` | `TradingGate` | `getMode() == EngineMode.READY` |
 
 ### Escalation without a state write

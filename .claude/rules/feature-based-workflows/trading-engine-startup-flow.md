@@ -13,16 +13,19 @@ the TWS API handshake to the point where strategy threads are running.
 | Component | Role in this flow |
 | --- | --- |
 | `mwd.trading.app.Main` | Entry point that constructs every collaborator, starts the daemon threads, registers the shutdown hook, and blocks on a `CountDownLatch`. |
-| `mwd.trading.config.Config` | Interface supplying the ticker universes, endpoint URLs, timeouts, and IBKR host/port/client-id values read during construction. |
+| `mwd.trading.config.Config` | Interface supplying strategy enablement/universes, endpoint URLs, timeouts, and IBKR host/port/client-id/account values read during construction. |
 | `mwd.trading.config.EnvPropConfig` | Concrete `Config` instantiated as the first statement of `main`. |
+| `mwd.trading.strategy.StrategyDefinition` / `StrategyActivationPolicy` | Resolve immutable activation metadata and reject unsafe mode, universe, or LIVE-account configuration before any external component starts. |
+| `mwd.trading.app.StartupManifest` | Immutable mode/account/client/strategy/journal/log identity emitted once after activation validation. |
 | `mwd.trading.broker.ibkr.RequestRegistry` | Maps IBKR request IDs to a ticker and an `EnumSet<DataConsumer>`; constructed before any request is issued. |
 | `mwd.trading.broker.ibkr.TickMap` | Constructed with `Config` and passed to the tick handlers for field-number classification. |
 | `mwd.trading.broker.ibkr.IdManager` | Holds the `AtomicInteger` order and request counters injected into `Blackboard`. |
 | `mwd.trading.broker.ibkr.TimeManager` | Holds the broker-clock offset injected into `Blackboard`. |
 | `mwd.trading.execution.OrderRegistry` | Bracket lookup maps injected into `Blackboard`. |
 | `mwd.trading.state.Blackboard` | Aggregate constructed from `IdManager`, `TimeManager`, `OrderRegistry`, and `Config`; owns the `Stock` map and the entry-serialization primitives. |
-| `mwd.trading.lifecycle.TradingGate` | Application-wide mode holder, constructed in `STARTING` and driven to `CONNECTING`/`RECONCILING`/`READY` during this flow. |
+| `mwd.trading.lifecycle.TradingGate` | Application-wide mode holder, constructed in `STARTING` and driven to `CONNECTING`/`RECONCILING`/`READY`; a LIVE instance independently starts entry-disarmed. |
 | `mwd.trading.lifecycle.EngineMode` | Enum of the modes the gate transitions through. |
+| `mwd.trading.lifecycle.TradingEnvironment` | Distinguishes PAPER/LIVE order destination from lifecycle state. |
 | `mwd.trading.reconciliation.BrokerState` | Broker-side record container constructed before `ReconciliationManager`. |
 | `mwd.trading.persistence.JsonTradingStateStore` | Loads the JSON trade journal in its constructor and reports `recoveredFromBackup()` / `activeTrades()` to `Main`. |
 | `mwd.trading.reconciliation.ReconciliationManager` | Receives `blackboard::getNextRequestId` as an `IntSupplier` and the managed-symbol set; `attachClient` is called from the `IbkrSessionManager` constructor. |
@@ -36,18 +39,18 @@ the TWS API handshake to the point where strategy threads are running.
 | `com.ib.client.EReader` / `com.ib.client.EJavaSignal` | Message reader and signal used by the `IBKR-Reader` thread. |
 | `mwd.trading.marketdata.MarketDataSubscriptionManager` | Constructed from `sessionManager.client()`, `Blackboard`, `RequestRegistry`, the symbol list, and `MarketDataInputStore`. |
 | `mwd.trading.marketdata.TickByTickManager` | Constructed from `Blackboard`, `sessionManager.client()`, and `RequestRegistry`. |
-| `mwd.trading.optionsproxy.OptionsIndicatorStore` | Constructed with the market-data symbol set and `config.getOptionsProxyFrameMaxAgeMs()`. |
-| `mwd.trading.optionsproxy.OptionsIndicatorFrameReceiver` | Constructed and started only when `config.isOptionsProxyEnabled()`. |
-| `mwd.trading.earnings.EarningsStore` / `EarningsClient` / `EarningsRefresher` | Constructed and started on their own thread only when `config.isEarningsEnabled()`. |
+| `mwd.trading.optionsproxy.OptionsIndicatorStore` | Constructed with the enabled-strategy market-data symbol set and `config.getOptionsProxyFrameMaxAgeMs()`; omitted when every strategy is disabled. |
+| `mwd.trading.optionsproxy.OptionsIndicatorFrameReceiver` | Constructed and started only when the store exists and `config.isOptionsProxyEnabled()`. |
+| `mwd.trading.earnings.EarningsStore` / `EarningsClient` / `EarningsRefresher` | Store is omitted when every strategy is disabled; client/refresher thread additionally require `config.isEarningsEnabled()`. |
 | `mwd.trading.calendar.MarketCalendarStore` / `MarketCalendarClient` / `MarketCalendarRefresher` | Constructed and started unconditionally on their own thread. |
 | `mwd.trading.risk.UniverseReference` | Loaded from `config.getUniverseReferencePath()`; its coverage report and age are logged before any strategy starts. |
 | `mwd.trading.risk.ConcentrationLimits` | Constructed from `Blackboard`, the reference table, and the three cap settings. |
-| `mwd.trading.ui.BlackboardMonitor` | Swing monitor constructed via `SwingUtilities.invokeLater` when `config.showUI()`. |
-| `mwd.trading.execution.BracketOrderExecutor` | Single `BracketOrderGateway` instance shared by all three strategies. |
+| `mwd.trading.ui.BlackboardMonitor` | Swing monitor constructed via `SwingUtilities.invokeLater` when `config.showUI()`; owns the only production caller of `TradingGate.armLiveTrading()`. |
+| `mwd.trading.execution.BracketOrderExecutor` | Single `BracketOrderGateway` instance shared by every enabled strategy. |
 | `mwd.trading.strategy.AbstractStrategy` | `Runnable` base wrapped by `Main.strategyThread(AbstractStrategy)`. |
-| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Strategy constructed with the earnings store in addition to the shared collaborators. |
-| `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Strategy constructed without the earnings store. |
-| `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Strategy constructed without the earnings store. |
+| `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Constructed only when its activation definition is enabled; takes the earnings store in addition to shared collaborators. |
+| `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Permanently PAPER-only and constructed only when enabled. |
+| `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Permanently PAPER-only and constructed only when enabled. |
 | `mwd.trading.broker.ibkr.callback.NextValidIdHandler` | Receives the first `nextValidId` callback and seeds `IdManager`. |
 | `mwd.trading.broker.ibkr.callback.BrokerTimeHandler` | Receives `currentTime` and sets the `TimeManager` offset. |
 
@@ -60,11 +63,15 @@ the TWS API handshake to the point where strategy threads are running.
    **Receiving Component:** `EnvPropConfig`
 
 2. **Initiating Component:** `Main`
-   **Method Invocation:** `config.getStrategyUniverse(String)` and `config.getStrategyReferenceSymbols(String)` for each of the three `STRATEGY_ID` constants, streamed into a distinct sorted `List<String>`
-   **Receiving Component:** `Config`
+   **Method Invocation:** `StrategyActivationPolicy.from(config)`, which reads `isStrategyEnabled`, universe, references, order environment, and expected account; then `StartupManifest.from(...)` is logged as `STARTUP_MANIFEST`
+   **Receiving Component:** `StrategyActivationPolicy`, `StartupManifest`
+
+2a. **Initiating Component:** `Main`
+   **Method Invocation:** `activationPolicy.marketDataSymbols()`
+   **Receiving Component:** distinct sorted `List<String>` containing only enabled-strategy trade and reference symbols
 
 3. **Initiating Component:** `Main`
-   **Method Invocation:** `new Blackboard(new IdManager(), new TimeManager(), new OrderRegistry(), config)`
+   **Method Invocation:** `new Blackboard(new IdManager(), new TimeManager(), new OrderRegistry(), config)` and `new TradingGate(config.isLiveTrading())`
    **Receiving Component:** `Blackboard`
 
 4. **Initiating Component:** `Main`
@@ -108,15 +115,15 @@ the TWS API handshake to the point where strategy threads are running.
     **Receiving Component:** `ConcentrationLimits`
 
 12. **Initiating Component:** `Main`
-    **Method Invocation:** `SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard, universeReference))` guarded by `config.showUI()`
+    **Method Invocation:** `SwingUtilities.invokeLater(() -> new BlackboardMonitor(blackboard, universeReference, tradingGate, config.isLiveTrading(), config.getExpectedAccount()))` guarded by `config.showUI()`; LIVE with no UI logs that the process is permanently entry-disarmed
     **Receiving Component:** `BlackboardMonitor`
 
 13. **Initiating Component:** `Main`
-    **Method Invocation:** `new BracketOrderExecutor(blackboard, sessionManager.client(), tradingGate, stateStore, config)`
+    **Method Invocation:** `new BracketOrderExecutor(blackboard, sessionManager.client(), tradingGate, stateStore, config, activationPolicy)`
     **Receiving Component:** `BracketOrderExecutor`
 
 14. **Initiating Component:** `Main`
-    **Method Invocation:** `strategyThread(AbstractStrategy)` for each of the three strategies, then `strategyThreads.forEach(Thread::start)`
+    **Method Invocation:** activation-ID checks followed by `strategyThread(AbstractStrategy)` for enabled strategies only, `List.copyOf(...)`, then `strategyThreads.forEach(Thread::start)`
     **Receiving Component:** `Thread` / `AbstractStrategy.run()`
 
 15. **Initiating Component:** `Main`
@@ -181,6 +188,10 @@ the TWS API handshake to the point where strategy threads are running.
     **Method Invocation:** `tradingGate.transitionTo(EngineMode.READY, String)` when no differences are found, otherwise `tradingGate.requireManualIntervention(String)`
     **Receiving Component:** `TradingGate`
 
+29a. **Initiating Component:** operator on the Swing event-dispatch thread (LIVE only)
+    **Method Invocation:** warning-dialog `YES` response → `tradingGate.armLiveTrading()` while mode is `READY`
+    **Receiving Component:** process-local `AtomicBoolean liveTradingArmed`; configuration and journal state have no write path to it
+
 ### Reconnect and shutdown
 
 30. **Initiating Component:** `EWrapperRaptor.connectionClosed()` / `EWrapperRaptor.error(int, long, int, String, String)`
@@ -196,13 +207,13 @@ the TWS API handshake to the point where strategy threads are running.
 ### Objects passed
 
 - `Config` → every constructed component that reads settings; passed by reference and never mutated.
-- `List<String> marketDataSymbols` → `MarketDataSubscriptionManager` (as `List.copyOf`), `ReconciliationManager` (as `Set.copyOf`), `OptionsIndicatorStore` (as `Set.copyOf`), `EarningsStore` (as `Set.copyOf`).
-- `Blackboard` → shared by the handlers, trackers, executor, concentration limits, monitor, and all three strategies.
+- `List<String> marketDataSymbols` from enabled definitions → `MarketDataSubscriptionManager` (as `List.copyOf`), `ReconciliationManager` (as `Set.copyOf`), and, when nonempty, `OptionsIndicatorStore` / `EarningsStore` (as `Set.copyOf`).
+- `Blackboard` → shared by the handlers, trackers, executor, concentration limits, optional monitor, and enabled strategies.
 - `EClientSocket` (obtained via `sessionManager.client()`) → `MarketDataSubscriptionManager`, `TickByTickManager`, `BracketOrderExecutor`, `ReconciliationManager`.
 - `IntSupplier` `blackboard::getNextRequestId` → `ReconciliationManager`, used in `begin(String)`.
 - `OptionsIndicatorFrameReceiver.AcceptedFrameListener` lambda `frame -> Main.mirrorFrameForMonitor(blackboard, frame)` → `OptionsIndicatorFrameReceiver`.
 - `Consumer<EarningsSnapshot>` lambda `snapshot -> Main.mirrorEarningsForMonitor(blackboard, snapshot)` → `EarningsRefresher`.
-- `TradingGate.State` record (`EngineMode mode`, `String reason`, `long changedAtEpochMillis`) held in an `AtomicReference`.
+- `TradingGate.State` record (`EngineMode mode`, `String reason`, `long changedAtEpochMillis`) held in an `AtomicReference`, plus the independent LIVE `AtomicBoolean` arm.
 
 ### Thread handoffs
 
@@ -212,7 +223,7 @@ the TWS API handshake to the point where strategy threads are running.
 | `IBKR-Session-Lifecycle` | `IBKR-Reader` daemon thread | `startReaderThread()` creates the thread that runs `signal.waitForSignal()` / `reader.processMsgs()` |
 | `IBKR-Reader` | `IBKR-Session-Lifecycle` | `onNextValidId()` and `onError(1101/1102)` re-post work with `lifecycleExecutor.execute(...)` |
 | `IBKR-Reader` | `IBKR-Reconciliation-Timeout` | `ReconciliationManager.begin` schedules `failEpoch` on its own single-thread scheduler |
-| Main thread | Three `<StrategyClassSimpleName>-Thread` daemon threads | `Main.strategyThread(AbstractStrategy)` + `Thread::start` |
+| Main thread | Zero or more enabled `<StrategyClassSimpleName>-Thread` daemon threads | `Main.strategyThread(AbstractStrategy)` + `Thread::start` |
 | Main thread | `Earnings-Refresher-Thread`, `Market-Calendar-Refresher-Thread` daemon threads | explicit `Thread` construction and `start()` |
 | Main thread | `Options-Proxy-UDP-Receiver` daemon thread | `OptionsIndicatorFrameReceiver.start()` |
 | Main thread | Swing event-dispatch thread | `SwingUtilities.invokeLater(...)` |

@@ -5,8 +5,8 @@ A Java 25 automated equity-trading engine built around the Interactive Brokers T
 > [!CAUTION]
 > This project is still under development and **must remain in PAPER** until the
 > remaining-work items at the end of this README are complete. `Main` now
-> instantiates `BracketOrderExecutor` and starts three strategy threads, so the
-> engine **can** submit orders once reconciliation opens the trading gate.
+> instantiates `BracketOrderExecutor` and starts every explicitly enabled strategy,
+> so the engine **can** submit orders once reconciliation opens the trading gate.
 > Two of those strategies, `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE`, exist
 > solely to generate executions for verification and are never to run live.
 
@@ -21,9 +21,10 @@ A Java 25 automated equity-trading engine built around the Interactive Brokers T
 | Margin rates and concentration | Implemented; **the rate table is empty** | Per-ticker rates and GICS sectors load from `data/universe-reference.csv`, and per-ticker and per-sector caps reduce every entry. No rate has been collected yet, so all 30 symbols fall back to the conservative default. |
 | Local trading-state journal | Implemented | Atomically writes order intent and broker acknowledgements to a JSON file with a backup. |
 | Startup/reconnect reconciliation | Implemented | Collects a complete broker snapshot and blocks automation on any mismatch or timeout. It does not automatically alter broker state. |
-| Bracket-order execution | Implemented and wired | `BracketOrderExecutor` supports a parent entry plus independent take-profit, stop-loss, and timed exits for each slice. Both strategies submit through the same instance. |
-| Long downside mean-reversion strategy | Implemented and scheduled | Strategy ID is `TWO_SIGMA_DOWNSIDE`; the descriptive Java class is `TwoSigmaDownsideMeanReversionStrategy`. |
-| Paper execution-verification strategies | Implemented and scheduled | Strategy IDs `ONE_SIGMA_DOWNSIDE` (long) and `ONE_SIGMA_UPSIDE` (short). Deliberately permissive, **PAPER only**; neither is intended to make money and neither will ever run live. |
+| Bracket-order execution | Implemented and wired | `BracketOrderExecutor` supports a parent entry plus independent take-profit, stop-loss, and timed exits for each slice. Every enabled strategy submits through the same instance. |
+| Strategy activation firewall | Implemented | Every known strategy has immutable permitted-mode metadata plus explicit enablement. Enabled PAPER-only strategies make LIVE startup fail before any broker or background component starts. Disabled strategies are not constructed or subscribed. |
+| Long downside mean-reversion strategy | Implemented and enabled by default in PAPER | Strategy ID is `TWO_SIGMA_DOWNSIDE`; the descriptive Java class is `TwoSigmaDownsideMeanReversionStrategy`. |
+| Paper execution-verification strategies | Implemented and enabled by default in PAPER | Strategy IDs `ONE_SIGMA_DOWNSIDE` (long) and `ONE_SIGMA_UPSIDE` (short). Deliberately permissive, **PAPER only**; the activation firewall prevents either from starting in LIVE. |
 | Options-proxy integration | Implemented | `OptionsIndicatorFrameReceiver` decodes UDP protobuf frames into `OptionsIndicatorStore`. All hard-coded implied moves are gone. |
 | SPY gamma-flip input | Implemented | Delivered on every proxy frame and gated on validity, session date, and freshness. |
 | Session logging and retention | Implemented | Console plus daily rolling files under `logs/`, a separate WARN/ERROR file, gzipped archives, and age and size based retention. |
@@ -64,16 +65,37 @@ The receiver's arrow into the `Blackboard` is display-only: it mirrors accepted 
 
 ## Safety model
 
+### Strategy activation and LIVE arming
+
+`StrategyActivationPolicy` resolves all three strategy definitions before any
+broker socket, proxy receiver, refresher, or strategy thread is created. Each
+definition contains the stable ID, its permitted environments, explicit enabled
+flag, trade universe, and reference symbols. `ONE_SIGMA_DOWNSIDE` and
+`ONE_SIGMA_UPSIDE` are permanently `PAPER`-only in code. An enabled strategy
+must have a nonempty universe; a disabled strategy may have an empty universe
+and contributes no market-data subscriptions. `BracketOrderExecutor` rechecks
+the same immutable policy at the final outbound boundary and rejects disabled,
+unknown, or wrong-environment strategy IDs before creating order state.
+
+LIVE has a second, independent firewall. A LIVE `TradingGate` starts disarmed on
+every process start even after reconciliation reaches `READY`. The Swing monitor
+requires an explicit warning-dialog confirmation before arming new LIVE entries
+for that process. Arming is held only in memory and is never loaded from
+configuration or the trading-state journal. With `SHOW_UI=false`, a LIVE process
+can operate only in monitor mode because it has no arming path. Protective order
+changes remain controlled by reconciliation readiness and are not disabled by
+the entry-arming flag.
+
 ### Trading gate
 
-`TradingGate` is the application-wide authority for new entries and automated order changes. Only `READY` allows them.
+`TradingGate` is the application-wide authority for new entries and automated order changes. `READY` is required for both; LIVE new entries additionally require the process-local UI arm.
 
 | Mode | Meaning |
 | --- | --- |
 | `STARTING` | Objects are being created; trading is closed. |
 | `CONNECTING` | The engine is connecting or waiting to reconnect to TWS. |
 | `RECONCILING` | Broker state is being collected and compared with local state. |
-| `READY` | Reconciliation matched; automated entries and order changes may proceed. |
+| `READY` | Reconciliation matched. PAPER entries and automated order changes may proceed; LIVE entries remain blocked until explicitly armed in the UI. |
 | `DEGRADED` | Connectivity or broker-data continuity was lost. |
 | `MANUAL_INTERVENTION` | An unsafe or unresolved condition requires operator review. |
 | `STOPPING` | The process is shutting down. |
@@ -310,13 +332,15 @@ it, so nothing else changed at the call sites.
 
 ## Startup and reconnect lifecycle
 
-1. `Main` loads configuration and creates the shared `Blackboard`, trading gate, broker-state collector, JSON journal, handlers, market-data subscriptions, and background services.
-2. Recovery from a backup journal is logged. A non-terminal local trade immediately latches `MANUAL_INTERVENTION` before broker reconciliation begins.
-3. `IbkrSessionManager` connects to the configured TWS host, derived port, and client ID.
-4. After `nextValidId`, it selects the requested market-data type, requests broker time, initializes subscriptions, and begins reconciliation.
-5. Reconciliation opens the gate only if the complete IBKR snapshot matches the local journal.
-6. Socket closure or IBKR connectivity loss marks market data stale and closes the trading gate.
-7. Reconnect restores subscriptions as needed and repeats reconciliation before automation can resume.
+1. `Main` loads configuration, resolves `StrategyActivationPolicy`, and fails before external activity if a strategy/mode combination, enabled universe, or LIVE expected account is unsafe.
+2. It logs one immutable `STARTUP_MANIFEST` naming PAPER/LIVE mode, account selection, API client ID, enabled strategy IDs, journal path, and session-log path.
+3. It creates the shared `Blackboard`, trading gate, broker-state collector, JSON journal, handlers, and subscriptions. Strategy-dependent indicator and earnings services are omitted when every strategy is disabled; the global calendar service still runs.
+4. Recovery from a backup journal is logged. A non-terminal local trade immediately latches `MANUAL_INTERVENTION` before broker reconciliation begins.
+5. `IbkrSessionManager` connects to the configured TWS host, derived port, and client ID.
+6. After `nextValidId`, it selects the requested market-data type, requests broker time, initializes subscriptions, and begins reconciliation.
+7. Reconciliation moves the lifecycle state to `READY` only if the complete IBKR snapshot matches the local journal. PAPER may then enter; LIVE remains entry-disarmed until explicitly armed in the UI.
+8. Socket closure or IBKR connectivity loss marks market data stale and closes the trading gate.
+9. Reconnect restores subscriptions as needed and repeats reconciliation before automation can resume.
 
 Handled IBKR connectivity codes currently include 1100, 1101, 1102, 1300, 502, 504, and 509.
 
@@ -551,15 +575,16 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 | --- | --- | --- |
 | `LIVE_IBKR_DATA` | `false` | Market-data quality only. Selects the IBKR market-data type and the tick-field mapping. |
 | `LIVE_IBKR_TRADING` | `false` | Which account receives orders. Selects the TWS port and the default state path. |
-| `SHOW_UI` | `false` | Opens the Swing Blackboard monitor when true. |
+| `SHOW_UI` | `false` | Opens the Swing Blackboard monitor when true. A LIVE process with this false remains permanently entry-disarmed. |
 | `STRATEGY_POLL_RATE_MS` | `16` | Delay between complete strategy-universe cycles once a strategy is started. |
 | `ENTRY_ACKNOWLEDGEMENT_TIMEOUT_MS` | `10000` | Time before an unacknowledged entry is escalated. |
 | `MAX_ACTIVE_POSITIONS` | `3` | Maximum number of symbols reserved across strategies, counting pending entries. |
+| `STRATEGY_TWO_SIGMA_DOWNSIDE_ENABLED` | `true` | Explicitly constructs and schedules the two-sigma strategy. Unknown/missing enable flags default false in code. |
 | `STRATEGY_TWO_SIGMA_DOWNSIDE_UNIVERSE` | 30 equities | Symbols the downside strategy may trade. |
 | `STRATEGY_TWO_SIGMA_DOWNSIDE_REFERENCE_SYMBOLS` | `SPY` | Non-traded symbols required by the strategy. |
 | `IBKR_HOST` | `127.0.0.1` | TWS or Gateway API host. |
 | `IBKR_CLIENT_ID` | `0` | IBKR API client ID. Use a unique value for each simultaneous engine connected to the same TWS session. |
-| `IBKR_EXPECTED_ACCOUNT` | blank | Optional required account. If configured and not returned by IBKR, the engine enters manual intervention. Strongly recommended for both PAPER and LIVE. |
+| `IBKR_EXPECTED_ACCOUNT` | blank | Required at startup in LIVE. In PAPER it may be blank, meaning TWS account selection is used, though explicitly setting it is safer. A configured account not returned by IBKR triggers manual intervention. |
 | `IBKR_RECONNECT_DELAY_MS` | `5000` | Delay before a socket reconnect attempt. |
 | `TRADING_STATE_PATH` | mode-derived | Overrides the JSON journal path. Defaults to `data/trading-state-paper.json` or `data/trading-state-live.json`. |
 | `OPTIONS_PROXY_ENABLED` | `true` | Starts the options-proxy UDP listener. When false, no indicators are received and no strategy depending on them can open a position. |
@@ -585,8 +610,10 @@ Baseline values live in `src/main/resources/config.properties`. A nonblank opera
 | `EARNINGS_REQUEST_TIMEOUT_MS` | `5000` | Read timeout for an earnings request. |
 | `EARNINGS_RETRY_DELAY_MS` | `30000` | Delay before retrying after a failed refresh. Shared by the market-calendar refresher. |
 | `MARKET_CALENDAR_ENDPOINT_URL` | `http://127.0.0.1:8000/calendar` | The proxy's calendar endpoint. Supplies the session close that all entry and exit timing derives from. |
-| `STRATEGY_ONE_SIGMA_DOWNSIDE_UNIVERSE` | same as the two-sigma universe | Symbols the long paper verification strategy trades. Set it empty to stop that strategy from running. |
-| `STRATEGY_ONE_SIGMA_UPSIDE_UNIVERSE` | same as the two-sigma universe | Symbols the short paper verification strategy trades. Set it empty to stop that strategy from running. |
+| `STRATEGY_ONE_SIGMA_DOWNSIDE_ENABLED` | `true` | Enables the long execution-verification strategy in PAPER. Enabling it in LIVE is a startup error. |
+| `STRATEGY_ONE_SIGMA_UPSIDE_ENABLED` | `true` | Enables the short execution-verification strategy in PAPER. Enabling it in LIVE is a startup error. |
+| `STRATEGY_ONE_SIGMA_DOWNSIDE_UNIVERSE` | same as the two-sigma universe | Symbols the long paper verification strategy trades. An enabled strategy must have a nonempty universe. |
+| `STRATEGY_ONE_SIGMA_UPSIDE_UNIVERSE` | same as the two-sigma universe | Symbols the short paper verification strategy trades. An enabled strategy must have a nonempty universe. |
 | `STRATEGY_ONE_SIGMA_*_REFERENCE_SYMBOLS` | empty | Neither reads a market index, so neither needs any. |
 
 ### Mode-derived settings
@@ -613,6 +640,11 @@ Three of the four pairings are legitimate — PAPER on delayed, PAPER on
 real-time, LIVE on real-time. The fourth, **LIVE trading on delayed data**,
 throws at startup rather than pricing real orders off a quote that is fifteen
 minutes old.
+
+LIVE startup additionally requires a nonblank `IBKR_EXPECTED_ACCOUNT`, rejects
+either enabled one-sigma verification strategy, and starts entry-disarmed. Set
+both one-sigma `*_ENABLED` flags false and `SHOW_UI=true` for any future LIVE
+profile. Reaching `READY` is necessary but does not arm LIVE entry submission.
 
 Because VWAP arrives only on a real-time subscription and gates every strategy,
 `LIVE_IBKR_DATA=false` means **no orders will be placed at all**. That is the
@@ -641,19 +673,22 @@ $env:ENGINE_LOG_NAME = 'paper-engine'
 
 These are also the repository defaults, so a same-laptop PAPER test needs no options-proxy overrides at all. `ENGINE_LOG_NAME` is worth setting anyway so a PAPER session's logs are never confused with a LIVE one's.
 
-### LIVE example on Ubuntu
+### Future LIVE example on Windows
 
 Do not use this profile until the strategy, proxy inputs, and PAPER checklist are complete:
 
-```bash
-export LIVE_IBKR_DATA=true
-export LIVE_IBKR_TRADING=true
-export IBKR_HOST=127.0.0.1
-export IBKR_CLIENT_ID=10
-export IBKR_EXPECTED_ACCOUNT=U1234567
-export MARGIN_METHODOLOGY=REG_T      # required; must match the real account
-export TRADING_STATE_PATH=data/trading-state-live.json
-export ENGINE_LOG_NAME=live-engine
+```powershell
+$env:LIVE_IBKR_DATA = 'true'
+$env:LIVE_IBKR_TRADING = 'true'
+$env:SHOW_UI = 'true' # the only production path that can arm LIVE entries
+$env:STRATEGY_ONE_SIGMA_DOWNSIDE_ENABLED = 'false'
+$env:STRATEGY_ONE_SIGMA_UPSIDE_ENABLED = 'false'
+$env:IBKR_HOST = '127.0.0.1'
+$env:IBKR_CLIENT_ID = '10'
+$env:IBKR_EXPECTED_ACCOUNT = 'U1234567'
+$env:MARGIN_METHODOLOGY = 'REG_T' # required; must match the real account
+$env:TRADING_STATE_PATH = 'data/trading-state-live.json'
+$env:ENGINE_LOG_NAME = 'live-engine'
 ```
 
 Use the actual account IDs and client IDs for each installation. Never share a journal file or a log file between PAPER and LIVE instances.
@@ -874,7 +909,7 @@ which is churn rather than verification.
 
 ### Shared limits
 
-All three strategies submit through one `BracketOrderExecutor` and share
+Every enabled strategy submits through one `BracketOrderExecutor` and shares
 `MAX_ACTIVE_POSITIONS`, which is **3**. Because these two fire far more often,
 **expect them to occupy most of the position slots** and `TWO_SIGMA_DOWNSIDE` to
 rarely get one.
@@ -942,12 +977,15 @@ also at a size cap, and archives are gzipped as
 
 **`ENGINE_LOG_NAME` must differ between engines that share a working
 directory**, for the same reason `TRADING_STATE_PATH` must: two JVMs rolling one
-file will corrupt each other's rollover. The normal deployment runs LIVE and
-PAPER on separate machines, so the default is safe there.
+file will corrupt each other's rollover. The planned PAPER/LIVE deployment uses
+the same Windows host, so both values must be distinct before simultaneous
+operation is introduced.
 
-Startup writes a header naming the resolved log path, the IBKR data mode, the
-readiness limits, and the journal path, so a later investigation can tell which
-run produced a file and under what configuration.
+Startup writes one immutable `STARTUP_MANIFEST` naming the PAPER/LIVE trading
+mode, account selection, API client ID, enabled strategies, resolved journal,
+and resolved log path. Additional header lines name data mode and readiness
+limits, so a later investigation can tell which run produced a file and under
+what configuration.
 
 Two deliberate choices support using these logs as evidence after an unexpected
 stop:
@@ -972,13 +1010,16 @@ unattended LIVE operation and are tracked separately.
 Before wiring or enabling any automated strategy:
 
 - confirm the engine connects only to the intended PAPER account;
+- exercise each strategy's `*_ENABLED` flag and confirm disabled strategies have no thread or market-data subscriptions;
+- confirm an enabled empty universe fails before broker/proxy startup while a disabled empty universe is accepted;
+- confirm both one-sigma strategies are rejected by a LIVE-mode startup test;
 - set and verify `IBKR_EXPECTED_ACCOUNT`;
 - confirm the gate reaches `READY` only after a clean empty-state reconciliation;
 - confirm every universe and reference symbol receives the intended market-data type;
 - verify previous close, VWAP, minute bars, volume baseline, ATR, RSI, and the account balances against TWS;
 - confirm the proxy is broadcasting and the engine accepts its frames, with `TICKERS` matching this engine's universe;
 - enter the SPY gamma flip for the correct `trading_date` and confirm the engine reports it valid;
-- confirm `logs/` is being written, that the startup header names the right journal and log paths, and that a deliberate restart leaves the shutdown sequence in the file;
+- confirm `logs/` is being written, that `STARTUP_MANIFEST` names the correct mode, account, client ID, enabled strategies, journal, and log paths, and that a deliberate restart leaves the shutdown sequence in the file;
 - confirm the engine reports the correct session close at startup, and that stopping the proxy makes entries block rather than fall back to a default close;
 - watch margin consumption as positions accumulate, and confirm `AvailableFunds` actually moves when an order is acknowledged rather than only when it fills — the account-freshness gate depends on it;
 - fill in `data/universe-reference.csv` and confirm the startup coverage report names no traded symbol as missing or defaulted;
@@ -1086,7 +1127,7 @@ A new strategy should:
 
 ## Remaining work before automated PAPER trading
 
-1. **Enable a real-time market-data subscription.** `DAILY_VWAP` is a required entry input for all three strategies and arrives only on `RT_VOLUME`, which delayed data does not carry. Until then the engine places no orders at all, and nothing below can be verified.
+1. **Enable a real-time market-data subscription.** `DAILY_VWAP` is a required entry input for every current strategy and arrives only on `RT_VOLUME`, which delayed data does not carry. Until then the engine places no orders at all, and nothing below can be verified.
 2. **Fill in `data/universe-reference.csv`.** Every rate is blank, so all 30 symbols size against the 0.50 default, and the draft sectors have not been checked against a GICS source.
 3. **Set `IBKR_EXPECTED_ACCOUNT`.** It is blank, so the guard against connecting to the wrong account is inactive.
 4. Complete end-to-end PAPER testing, including disconnect and restart scenarios. `ONE_SIGMA_DOWNSIDE` and `ONE_SIGMA_UPSIDE` exist to generate the executions this needs, in both directions.

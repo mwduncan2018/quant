@@ -160,7 +160,7 @@ comparison with the local JSON journal, and the resulting `TradingGate` transiti
 | `IBKR-Reader` → `ReconciliationManager` | Every collection callback arrives on the reader thread through `EWrapperRaptor`, `AccountEventHandler`, or `OrderLifecycleHandler`. |
 | `IBKR-Reader` → `TradingGate` | `completeIfReady` runs on whichever reader-thread callback completes the fourth flag, and performs the `READY` / `MANUAL_INTERVENTION` transition there. |
 | `IBKR-Reconciliation-Timeout` → `TradingGate` | A timed-out epoch performs the `MANUAL_INTERVENTION` transition on the scheduler thread. |
-| Any of the above → `<Strategy>-Thread` | Strategies observe the resulting mode only through `TradingGate.allowsNewEntries()` / `allowsAutomatedOrderChanges()`, backed by an `AtomicReference<State>`. |
+| Any of the above → `<Strategy>-Thread` | Strategies observe lifecycle and LIVE-entry-arm state only through `TradingGate.allowsNewEntries()` / `allowsAutomatedOrderChanges()`, backed by `AtomicReference<State>` plus the LIVE `AtomicBoolean`. |
 
 Every public method of `ReconciliationManager` that touches `activeEpoch`,
 `brokerState`, or `client` is `synchronized` on the manager instance, so lifecycle,

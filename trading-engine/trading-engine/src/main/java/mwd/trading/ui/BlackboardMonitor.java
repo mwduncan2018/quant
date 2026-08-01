@@ -12,6 +12,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,6 +25,8 @@ import javax.swing.table.TableColumn;
 import mwd.trading.domain.Account;
 import mwd.trading.domain.Stock;
 import mwd.trading.execution.BracketOrder;
+import mwd.trading.lifecycle.EngineMode;
+import mwd.trading.lifecycle.TradingGate;
 import mwd.trading.risk.UniverseReference;
 import mwd.trading.state.Blackboard;
 
@@ -32,6 +35,9 @@ public class BlackboardMonitor extends JFrame {
 	private static final long serialVersionUID = 1L;
 	private final Blackboard blackboard;
 	private final UniverseReference universeReference;
+	private final TradingGate tradingGate;
+	private final boolean liveTrading;
+	private final String liveAccount;
 	private final DefaultTableModel tableModel;
 	private final JTable monitorTable;
 	private final JPanel headerPanel;
@@ -40,6 +46,8 @@ public class BlackboardMonitor extends JFrame {
 	private final JButton view1Button;
 	private final JButton view2Button;
 	private final JButton viewAllButton;
+	private final JButton liveTradingArmButton;
+	private final JLabel liveTradingStatusLabel;
 
 	private final JLabel netLiquidationValueLabel = new JLabel();
 	private final JLabel totalCashValueLabel = new JLabel();
@@ -86,9 +94,17 @@ public class BlackboardMonitor extends JFrame {
 	private final Set<Integer> view2Indices = Set.of(0, 1, 2, 3, 4, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 			31);
 
-	public BlackboardMonitor(Blackboard blackboard, UniverseReference universeReference) {
-		this.blackboard = blackboard;
-		this.universeReference = universeReference;
+	public BlackboardMonitor(
+			Blackboard blackboard,
+			UniverseReference universeReference,
+			TradingGate tradingGate,
+			boolean liveTrading,
+			String liveAccount) {
+		this.blackboard = Objects.requireNonNull(blackboard, "blackboard");
+		this.universeReference = Objects.requireNonNull(universeReference, "universeReference");
+		this.tradingGate = Objects.requireNonNull(tradingGate, "tradingGate");
+		this.liveTrading = liveTrading;
+		this.liveAccount = Objects.requireNonNull(liveAccount, "liveAccount").trim();
 		this.tableModel = new DefaultTableModel(tableColumns, 0);
 		this.monitorTable = new JTable(tableModel);
 		this.monitorTable.setRowHeight(25);
@@ -143,10 +159,21 @@ public class BlackboardMonitor extends JFrame {
 		view1Button = new JButton("View 1");
 		view2Button = new JButton("View 2");
 		viewAllButton = new JButton("View All");
+		liveTradingArmButton = new JButton("ARM LIVE TRADING");
+		liveTradingStatusLabel = new JLabel("LIVE DISARMED");
 
 		view1Button.addActionListener(actionEvent -> updateView(ViewState.VIEW_1));
 		view2Button.addActionListener(actionEvent -> updateView(ViewState.VIEW_2));
 		viewAllButton.addActionListener(actionEvent -> updateView(ViewState.VIEW_ALL));
+		liveTradingArmButton.addActionListener(actionEvent -> confirmAndArmLiveTrading());
+
+		if (liveTrading) {
+			liveTradingStatusLabel.setFont(new Font("SansSerif", Font.BOLD, 13));
+			liveTradingStatusLabel.setForeground(Color.RED);
+			liveTradingArmButton.setForeground(Color.RED);
+			viewControlPanel.add(liveTradingStatusLabel);
+			viewControlPanel.add(liveTradingArmButton);
+		}
 
 		viewControlPanel.add(view1Button);
 		viewControlPanel.add(view2Button);
@@ -188,6 +215,49 @@ public class BlackboardMonitor extends JFrame {
 		animationRepaintTimer.start();
 
 		startDataRefreshThread();
+	}
+
+	private void confirmAndArmLiveTrading() {
+		if (!liveTrading || tradingGate.getMode() != EngineMode.READY) {
+			JOptionPane.showMessageDialog(
+					this,
+					"LIVE trading can be armed only after broker reconciliation reaches READY.",
+					"LIVE trading remains disarmed",
+					JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+
+		int choice = JOptionPane.showConfirmDialog(
+				this,
+				"Arm LIVE order entry for account " + liveAccount + " for this process only?\n"
+						+ "This permits real, margin-enabled orders after all other readiness checks pass.",
+				"Confirm LIVE trading arming",
+				JOptionPane.YES_NO_OPTION,
+				JOptionPane.WARNING_MESSAGE);
+		if (choice != JOptionPane.YES_OPTION) {
+			return;
+		}
+
+		try {
+			tradingGate.armLiveTrading();
+			updateLiveTradingControls();
+		} catch (IllegalStateException exception) {
+			JOptionPane.showMessageDialog(
+					this,
+					exception.getMessage(),
+					"LIVE trading remains disarmed",
+					JOptionPane.WARNING_MESSAGE);
+		}
+	}
+
+	private void updateLiveTradingControls() {
+		if (!liveTrading) {
+			return;
+		}
+		boolean armed = tradingGate.isLiveTradingArmed();
+		liveTradingStatusLabel.setText(armed ? "LIVE ARMED" : "LIVE DISARMED");
+		liveTradingStatusLabel.setForeground(armed ? new Color(0, 128, 0) : Color.RED);
+		liveTradingArmButton.setEnabled(!armed && tradingGate.getMode() == EngineMode.READY);
 	}
 
 	private void updateView(ViewState targetViewState) {
@@ -323,6 +393,7 @@ public class BlackboardMonitor extends JFrame {
 
 	private void updateDashboardData() {
 		SwingUtilities.invokeLater(() -> {
+			updateLiveTradingControls();
 			if ((blackboard.getSystemHalted() || blackboard.getSystemUpdateRequired()) && !isSirenStarted) {
 				startSiren();
 			}

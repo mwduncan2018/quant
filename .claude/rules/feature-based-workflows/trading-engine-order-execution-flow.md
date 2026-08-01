@@ -21,8 +21,9 @@ Traces a new entry from the strategy poll loop through bracket construction and
 | `mwd.trading.strategy.TwoSigmaDownsideMeanReversionStrategy` | Concrete strategy supplying `isEntryConditionMet`, `calculateEntryPrice`, `calculateSliceIntents`, `evaluateTickStreamNeed`, `manageOpenPosition`, `getStrategyName`, `getTradeDirection`. |
 | `mwd.trading.strategy.OneSigmaDownsideMeanReversionStrategy` | Concrete strategy with the same override set, `TradeDirection.LONG`. |
 | `mwd.trading.strategy.OneSigmaUpsideMeanReversionStrategy` | Concrete strategy with the same override set, `TradeDirection.SHORT`. |
+| `mwd.trading.strategy.StrategyActivationPolicy` | Immutable startup policy rechecked by the executor so disabled, unknown, or wrong-environment strategy IDs cannot reach order construction. |
 | `mwd.trading.execution.BracketOrderGateway` | Interface declaring `placeTripleThreat(...)` and `updateTripleThreatExits(...)`; the only execution API a strategy holds. |
-| `mwd.trading.execution.BracketOrderExecutor` | `BracketOrderGateway` implementation that validates, builds the order bundle, registers it, persists intent, and calls `placeOrder`. |
+| `mwd.trading.execution.BracketOrderExecutor` | `BracketOrderGateway` implementation that rechecks activation, validates, builds the order bundle, registers it, persists intent, and calls `placeOrder`. |
 | `mwd.trading.execution.BracketOrderExecutor.SliceIntent` | Mutable holder of `Decimal quantity`, `double takeProfitPrice`, `double stopLossPrice`, `long timeExit` produced by the strategy. |
 | `mwd.trading.execution.BracketOrder` | Aggregate holding trade identity, `Status`, filled/remaining quantities, the `ExitSlice` list, and the `OrderLegState` map. |
 | `mwd.trading.execution.BracketOrder.ExitSlice` | One slice's three order IDs, quantity, OCA group, and current exit prices/time. |
@@ -96,8 +97,8 @@ Traces a new entry from the strategy poll loop through bracket construction and
 ### Bracket construction and submission (strategy thread)
 
 12. **Initiating Component:** `BracketOrderExecutor.placeTripleThreat(...)`
-    **Method Invocation:** `tradingGate.allowsNewEntries()`; `validateEntryIntent(String, Decimal, double, List<SliceIntent>)` which calls `client.isConnected()` and checks quantity, price, and that slice quantities sum to the parent quantity
-    **Receiving Component:** `TradingGate`, `EClientSocket`
+    **Method Invocation:** `tradingGate.allowsNewEntries()`; normalize the strategy ID; `strategyActivationPolicy.requireEntrySubmissionAllowed(strategyName)`; `validateEntryIntent(String, Decimal, double, List<SliceIntent>)` which calls `client.isConnected()` and checks quantity, price, and that slice quantities sum to the parent quantity
+    **Receiving Component:** `TradingGate`, `StrategyActivationPolicy`, `EClientSocket`
 
 13. **Initiating Component:** `BracketOrderExecutor.placeTripleThreat(...)`
     **Method Invocation:** `blackboard.getStock(tickerSymbol)`, `stock.getContract()`, `configuredAccount()` (`config.getExpectedAccount()` else `blackboard.getAccount().getAccountId()`); a missing contract or blank account calls `halt(String)` and throws `IllegalStateException`
